@@ -162,6 +162,7 @@ let private normalizeLocalExpr: ValueExpr -> ValueExpr =
         | VECase(es, els) ->
             VECase(Array.map (fun (cond, e) -> (traverse cond, traverse e)) es, Option.map traverse els)
         | VEArray vals -> VEArray(Array.map traverse vals)
+        | VEExists query -> failwithf "Invalid EXISTS subquery in local expression: %O" query
         | VESubquery query -> failwithf "Invalid subquery in local expression: %O" query
 
     traverse
