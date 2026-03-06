@@ -787,7 +787,7 @@ let private loadRestoredRows
                     { A = from
                       B = referenceFrom
                       Type = Left
-                      Condition = joinCheck }
+                      Condition = Some joinCheck }
 
                 from <- FJoin join
 
@@ -890,7 +890,7 @@ let private loadRestoredRows
         { A = from
           B = sourceFrom
           Type = Left
-          Condition = joinCheck }
+          Condition = Some joinCheck }
 
     let singleSelect =
         { emptySingleSelectExpr with

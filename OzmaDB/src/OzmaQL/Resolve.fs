@@ -3289,7 +3289,8 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
             let isInner1 =
                 match join.Type with
                 | Left
-                | Inner -> isInner
+                | Inner
+                | Cross -> isInner
                 | _ -> false
 
             let (infoA, newA) = resolveFromExpr ctx fromInfo isInner1 flags join.A
@@ -3297,26 +3298,34 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
             let isInner2 =
                 match join.Type with
                 | Right
-                | Inner -> isInner
+                | Inner
+                | Cross -> isInner
                 | _ -> false
 
             let (infoB, newB) = resolveFromExpr ctx infoA isInner2 flags join.B
 
             let localCtx = addFromToContext infoB ctx
-            let (innerInfo, newFieldExpr) = resolveFieldExpr localCtx join.Condition
 
-            if innerInfo.Info.Flags.HasAggregates then
-                raisef QueryResolveException "Cannot use aggregate functions in join expression"
+            let (retInfo, newCondition) =
+                match join.Condition with
+                | None -> (infoB, None)
+                | Some condition ->
+                    let (innerInfo, newFieldExpr) = resolveFieldExpr localCtx condition
 
-            let retInfo =
-                { infoB with
-                    ExprInfo = unionSubqueryExprInfo infoB.ExprInfo (resolvedToSubqueryExprInfo innerInfo.Info) }
+                    if innerInfo.Info.Flags.HasAggregates then
+                        raisef QueryResolveException "Cannot use aggregate functions in join expression"
+
+                    let info =
+                        { infoB with
+                            ExprInfo = unionSubqueryExprInfo infoB.ExprInfo (resolvedToSubqueryExprInfo innerInfo.Info) }
+
+                    (info, Some newFieldExpr)
 
             let newJoin =
                 { Type = join.Type
                   A = newA
                   B = newB
-                  Condition = newFieldExpr }
+                  Condition = newCondition }
 
             (retInfo, FJoin newJoin)
 
@@ -3778,7 +3787,7 @@ and private relabelFromExpr: ResolvedFromExpr -> ResolvedFromExpr =
             { Type = join.Type
               A = relabelFromExpr join.A
               B = relabelFromExpr join.B
-              Condition = relabelFieldExpr join.Condition }
+              Condition = Option.map relabelFieldExpr join.Condition }
 
 and private relabelFieldExpr (expr: ResolvedFieldExpr) : ResolvedFieldExpr =
     let mapper =

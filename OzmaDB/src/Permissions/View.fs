@@ -217,7 +217,7 @@ type private PermissionsApplier
                 { Type = join.Type
                   A = applyToFromExpr join.A
                   B = applyToFromExpr join.B
-                  Condition = applyToValueExpr join.Condition }
+                  Condition = Option.map applyToValueExpr join.Condition }
 
     and applyToInsertValue =
         function

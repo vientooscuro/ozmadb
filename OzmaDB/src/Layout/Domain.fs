@@ -242,7 +242,7 @@ let private compileRowSpecificReferenceOptionsSelect
         { Type = Inner
           A = rowFrom
           B = refFrom
-          Condition = FEValue(FBool true) }
+          Condition = Some(FEValue(FBool true)) }
 
     let argumentInfo = requiredArgument <| FTScalar(SFTReference(fieldRef.Entity, None))
     let placeholder = PLocal funId

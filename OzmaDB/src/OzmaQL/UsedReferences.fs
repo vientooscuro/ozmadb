@@ -166,7 +166,7 @@ type private UsedReferencesBuilder(layout: ILayoutBits) =
         | FJoin join ->
             buildForFromExpr join.A
             buildForFromExpr join.B
-            ignore <| buildForFieldExpr join.Condition
+            Option.iter (fun cond -> ignore <| buildForFieldExpr cond) join.Condition
 
     and buildForValuesValue: ResolvedValuesValue -> unit =
         function

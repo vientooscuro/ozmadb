@@ -127,6 +127,7 @@ and tokenizeOzmaQL = parse
     | r i g h t               { Parse.RIGHT }
     | i n n e r               { Parse.INNER }
     | o u t e r               { Parse.OUTER }
+    | c r o s s               { Parse.CROSS }
     | j o i n                 { Parse.JOIN }
     | o n                     { Parse.ON }
     | o r d e r               { Parse.ORDER }

@@ -608,14 +608,14 @@ type private ConstraintUseNewConverter(constrEntityRef: ResolvedEntityRef) =
             match (ma, mb) with
             | (None, None) -> failwithf "Impossible JOIN of two constrained entities: %O" expr
             | (Some other, None)
-            | (None, Some other) -> (Some <| useNewInValueExpr join.Condition, name, Some other)
+            | (None, Some other) -> (Option.map useNewInValueExpr join.Condition, name, Some other)
             | (Some a, Some b) ->
                 let ret =
                     SQL.FJoin
                         { Type = join.Type
                           A = a
                           B = b
-                          Condition = useNewInValueExpr join.Condition }
+                          Condition = Option.map useNewInValueExpr join.Condition }
 
                 (valExpr, name, Some ret)
 
@@ -1351,7 +1351,7 @@ let private compileReferenceOfTypeCheck
                 { Type = SQL.JoinType.Left
                   A = SQL.FTable fTableA
                   B = SQL.FTable fTableB
-                  Condition = joinExpr }
+                  Condition = Some joinExpr }
 
         let singleSelect =
             { SQL.emptySingleSelectExpr with

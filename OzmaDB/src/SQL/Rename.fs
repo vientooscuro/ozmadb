@@ -92,7 +92,7 @@ type private NaiveRenamer(renamesMap: RenamesMap) =
                 { Type = join.Type
                   A = renameFromExpr join.A
                   B = renameFromExpr join.B
-                  Condition = renameValueExpr join.Condition }
+                  Condition = Option.map renameValueExpr join.Condition }
 
     and renameInsertValue =
         function

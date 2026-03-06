@@ -455,6 +455,7 @@ let private compileJoin: JoinType -> SQL.JoinType =
     | Right -> SQL.Right
     | Inner -> SQL.Inner
     | Outer -> SQL.Full
+    | Cross -> SQL.Cross
 
 let private compileSetOp: SetOperation -> SQL.SetOperation =
     function
@@ -766,7 +767,7 @@ let private makeJoinNode (layout: Layout) (joinKey: JoinKey) (join: JoinPath) (f
         { Type = SQL.Left
           A = from
           B = subquery
-          Condition = joinExpr }
+          Condition = Some joinExpr }
 
 let fromTableName (table: SQL.FromTable) =
     table.Alias
@@ -3139,7 +3140,8 @@ type private QueryCompiler
             let isInner1 =
                 match join.Type with
                 | Left
-                | Inner -> isInner
+                | Inner
+                | Cross -> isInner
                 | _ -> false
 
             let (fromRes1, r1) = compileFromExpr ctx nextJoinId main1 isInner1 join.A
@@ -3152,7 +3154,8 @@ type private QueryCompiler
             let isInner2 =
                 match join.Type with
                 | Right
-                | Inner -> isInner
+                | Inner
+                | Cross -> isInner
                 | _ -> false
 
             let (fromRes2, r2) =
@@ -3165,7 +3168,13 @@ type private QueryCompiler
                   NextJoinId = fromRes2.Joins.NextJoinId
                   Namespace = ctx.JoinNamespace }
 
-            let (newJoinPaths, joinExpr) = compileFieldExpr ctx joinPaths join.Condition
+            let (newJoinPaths, joinExprOpt) =
+                match join.Condition with
+                | None -> (joinPaths, None)
+                | Some condition ->
+                    let (paths, expr) = compileFieldExpr ctx joinPaths condition
+                    (paths, Some expr)
+
             let augmentedJoinPaths = Map.difference newJoinPaths.Map joinPaths.Map
             // Split augmented joins to joins for left and right part of the expression.
             let (newJoinPathsA, newJoinPathsB) =
@@ -3187,7 +3196,7 @@ type private QueryCompiler
                 { Type = compileJoin join.Type
                   A = r1
                   B = r2
-                  Condition = joinExpr }
+                  Condition = joinExprOpt }
                 : SQL.JoinExpr
 
             let res =
@@ -3437,7 +3446,7 @@ type private QueryCompiler
                             { A = fromExpr
                               B = SQL.FTable fromTable
                               Type = SQL.Full
-                              Condition = joinSame }
+                              Condition = Some joinSame }
                             : SQL.JoinExpr
 
                         (where, SQL.FJoin joinExpr)

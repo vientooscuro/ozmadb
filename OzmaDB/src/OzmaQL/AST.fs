@@ -374,6 +374,7 @@ type JoinType =
     | Left
     | Right
     | Outer
+    | Cross
 
     override this.ToString() = this.ToOzmaQLString()
 
@@ -383,6 +384,7 @@ type JoinType =
         | Right -> "RIGHT"
         | Inner -> "INNER"
         | Outer -> "OUTER"
+        | Cross -> "CROSS"
 
     interface IOzmaQLString with
         member this.ToOzmaQLString() = this.ToOzmaQLString()
@@ -1172,17 +1174,25 @@ and [<NoEquality; NoComparison>] JoinExpr<'e, 'f> when 'e :> IOzmaQLName and 'f 
     { Type: JoinType
       A: FromExpr<'e, 'f>
       B: FromExpr<'e, 'f>
-      Condition: FieldExpr<'e, 'f> }
+      Condition: FieldExpr<'e, 'f> option }
 
     override this.ToString() = this.ToOzmaQLString()
 
     member this.ToOzmaQLString() =
-        sprintf
-            "(%s %s JOIN %s ON %s)"
-            (this.A.ToOzmaQLString())
-            (this.Type.ToOzmaQLString())
-            (this.B.ToOzmaQLString())
-            (this.Condition.ToOzmaQLString())
+        match this.Condition with
+        | None ->
+            sprintf
+                "(%s %s JOIN %s)"
+                (this.A.ToOzmaQLString())
+                (this.Type.ToOzmaQLString())
+                (this.B.ToOzmaQLString())
+        | Some condition ->
+            sprintf
+                "(%s %s JOIN %s ON %s)"
+                (this.A.ToOzmaQLString())
+                (this.Type.ToOzmaQLString())
+                (this.B.ToOzmaQLString())
+                (condition.ToOzmaQLString())
 
     interface IOzmaQLString with
         member this.ToOzmaQLString() = this.ToOzmaQLString()

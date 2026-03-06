@@ -219,6 +219,7 @@ let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSe
 %token RIGHT
 %token INNER
 %token OUTER
+%token CROSS
 %token JOIN
 %token ON
 %token ORDER
@@ -645,7 +646,8 @@ QuerySource:
 
 JoinedTable:
     | LEFT_PAREN JoinedTable RIGHT_PAREN { $2 }
-    | QuerySource JoinType JOIN QuerySource ON FieldExpr { FJoin { Type = $2; A = $1; B = $4; Condition = $6 } }
+    | QuerySource JoinType JOIN QuerySource ON FieldExpr { FJoin { Type = $2; A = $1; B = $4; Condition = Some $6 } }
+    | QuerySource CROSS JOIN QuerySource { FJoin { Type = Cross; A = $1; B = $4; Condition = None } }
 
 ColumnAliases:
     | LEFT_PAREN ColumnAliasesList RIGHT_PAREN { List.toArray $2 }

@@ -369,6 +369,7 @@ type JoinType =
     | Left
     | Right
     | Full
+    | Cross
 
     override this.ToString() = this.ToSQLString()
 
@@ -378,6 +379,7 @@ type JoinType =
         | Left -> "LEFT"
         | Right -> "RIGHT"
         | Full -> "FULL"
+        | Cross -> "CROSS"
 
     interface ISQLString with
         member this.ToSQLString() = this.ToSQLString()
@@ -738,17 +740,25 @@ and [<NoEquality; NoComparison>] JoinExpr =
     { Type: JoinType
       A: FromExpr
       B: FromExpr
-      Condition: ValueExpr }
+      Condition: ValueExpr option }
 
     override this.ToString() = this.ToSQLString()
 
     member this.ToSQLString() =
-        sprintf
-            "(%s %s JOIN %s ON %s)"
-            (this.A.ToSQLString())
-            (this.Type.ToSQLString())
-            (this.B.ToSQLString())
-            (this.Condition.ToSQLString())
+        match this.Condition with
+        | None ->
+            sprintf
+                "(%s %s JOIN %s)"
+                (this.A.ToSQLString())
+                (this.Type.ToSQLString())
+                (this.B.ToSQLString())
+        | Some condition ->
+            sprintf
+                "(%s %s JOIN %s ON %s)"
+                (this.A.ToSQLString())
+                (this.Type.ToSQLString())
+                (this.B.ToSQLString())
+                (condition.ToSQLString())
 
     interface ISQLString with
         member this.ToSQLString() = this.ToSQLString()
