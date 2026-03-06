@@ -1030,7 +1030,13 @@ and [<NoEquality; NoComparison>] SingleSelectExpr<'e, 'f> when 'e :> IOzmaQLName
 
         sprintf
             "SELECT %s"
-            (String.concatWithWhitespaces [ distinctStr; resultStr; fromStr; whereStr; groupByStr; this.OrderLimit.ToOzmaQLString() ])
+            (String.concatWithWhitespaces
+                [ distinctStr
+                  resultStr
+                  fromStr
+                  whereStr
+                  groupByStr
+                  this.OrderLimit.ToOzmaQLString() ])
 
     interface IOzmaQLString with
         member this.ToOzmaQLString() = this.ToOzmaQLString()
@@ -1181,11 +1187,7 @@ and [<NoEquality; NoComparison>] JoinExpr<'e, 'f> when 'e :> IOzmaQLName and 'f 
     member this.ToOzmaQLString() =
         match this.Condition with
         | None ->
-            sprintf
-                "(%s %s JOIN %s)"
-                (this.A.ToOzmaQLString())
-                (this.Type.ToOzmaQLString())
-                (this.B.ToOzmaQLString())
+            sprintf "(%s %s JOIN %s)" (this.A.ToOzmaQLString()) (this.Type.ToOzmaQLString()) (this.B.ToOzmaQLString())
         | Some condition ->
             sprintf
                 "(%s %s JOIN %s ON %s)"

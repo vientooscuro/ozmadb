@@ -746,12 +746,7 @@ and [<NoEquality; NoComparison>] JoinExpr =
 
     member this.ToSQLString() =
         match this.Condition with
-        | None ->
-            sprintf
-                "(%s %s JOIN %s)"
-                (this.A.ToSQLString())
-                (this.Type.ToSQLString())
-                (this.B.ToSQLString())
+        | None -> sprintf "(%s %s JOIN %s)" (this.A.ToSQLString()) (this.Type.ToSQLString()) (this.B.ToSQLString())
         | Some condition ->
             sprintf
                 "(%s %s JOIN %s ON %s)"
