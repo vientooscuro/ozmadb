@@ -26,14 +26,14 @@ jobs:
       - name: Restore
         run: |
           dotnet tool restore
-          dotnet restore --locked-mode -r linux-x64
+          dotnet restore --locked-mode
       - name: Check formatting
         run: |
           dotnet format --no-restore --verify-no-changes
           dotnet tool run fantomas --check .
       - name: Build Release
         run: |
-          dotnet publish --no-restore -o out/ozmadb -c Release -r linux-x64 OzmaDB/OzmaDB.fsproj
+          dotnet publish -o out/ozmadb -c Release -r linux-x64 OzmaDB/OzmaDB.fsproj
       - name: Upload Artifacts
         id: upload
         uses: actions/upload-artifact@v4
