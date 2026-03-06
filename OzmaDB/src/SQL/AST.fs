@@ -769,6 +769,7 @@ and [<NoEquality; NoComparison>] SelectedColumn =
 
 and [<NoEquality; NoComparison>] SingleSelectExpr =
     { Columns: SelectedColumn[]
+      Distinct: bool
       From: FromExpr option
       Where: ValueExpr option
       GroupBy: ValueExpr[]
@@ -780,6 +781,8 @@ and [<NoEquality; NoComparison>] SingleSelectExpr =
 
     member this.ToSQLString() =
         let resultsStr = this.Columns |> Seq.map toSQLString |> String.concat ", "
+
+        let distinctStr = if this.Distinct then "DISTINCT" else ""
 
         let fromStr =
             match this.From with
@@ -799,6 +802,7 @@ and [<NoEquality; NoComparison>] SingleSelectExpr =
 
         String.concatWithWhitespaces
             [ "SELECT"
+              distinctStr
               resultsStr
               fromStr
               whereStr
@@ -1445,6 +1449,7 @@ let parseBoolValue =
 
 let emptySingleSelectExpr: SingleSelectExpr =
     { Columns = [||]
+      Distinct = false
       From = None
       Where = None
       GroupBy = [||]

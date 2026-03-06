@@ -988,6 +988,7 @@ and [<NoEquality; NoComparison>] OrderLimitClause<'e, 'f> when 'e :> IOzmaQLName
 and [<NoEquality; NoComparison>] SingleSelectExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
     { Attributes: AttributesMap<'e, 'f>
       Results: QueryResult<'e, 'f>[]
+      Distinct: bool
       From: FromExpr<'e, 'f> option
       Where: FieldExpr<'e, 'f> option
       GroupBy: FieldExpr<'e, 'f>[]
@@ -1004,6 +1005,8 @@ and [<NoEquality; NoComparison>] SingleSelectExpr<'e, 'f> when 'e :> IOzmaQLName
 
         let resultsStrs = this.Results |> Seq.map toOzmaQLString
         let resultStr = Seq.append attributesStrs resultsStrs |> String.concat ", "
+
+        let distinctStr = if this.Distinct then "DISTINCT" else ""
 
         let fromStr =
             match this.From with
@@ -1023,7 +1026,7 @@ and [<NoEquality; NoComparison>] SingleSelectExpr<'e, 'f> when 'e :> IOzmaQLName
 
         sprintf
             "SELECT %s"
-            (String.concatWithWhitespaces [ resultStr; fromStr; whereStr; groupByStr; this.OrderLimit.ToOzmaQLString() ])
+            (String.concatWithWhitespaces [ distinctStr; resultStr; fromStr; whereStr; groupByStr; this.OrderLimit.ToOzmaQLString() ])
 
     interface IOzmaQLString with
         member this.ToOzmaQLString() = this.ToOzmaQLString()
@@ -2170,6 +2173,7 @@ let resolvedRefFieldExpr (ref: 'f) : FieldExpr<'e, BoundRef<LinkedRef<'f>>> =
 let emptySingleSelectExpr: SingleSelectExpr<'e, 'f> =
     { Attributes = Map.empty
       Results = [||]
+      Distinct = false
       From = None
       Where = None
       GroupBy = [||]

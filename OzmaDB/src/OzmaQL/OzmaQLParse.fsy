@@ -471,14 +471,19 @@ SetOp:
     | INTERSECT { Intersect }
     | EXCEPT    { Except }
 
+OptDistinct:
+    |          { false }
+    | DISTINCT { true }
+
 SingleSelect:
-    | SELECT OptQueryResults OptFromClause OptWhereClause OptGroupByClause {
-        let (attributes, results) = splitResults $2
+    | SELECT OptDistinct OptQueryResults OptFromClause OptWhereClause OptGroupByClause {
+        let (attributes, results) = splitResults $3
         { Attributes = attributes
           Results = results
-          From = $3
-          Where = $4
-          GroupBy = $5
+          Distinct = $2
+          From = $4
+          Where = $5
+          GroupBy = $6
           OrderLimit = emptyOrderLimitClause
           Extra = ObjectMap.empty
         }

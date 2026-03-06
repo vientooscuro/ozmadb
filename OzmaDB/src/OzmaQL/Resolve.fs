@@ -3137,10 +3137,11 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
 
         let newQuery =
             { Attributes = attributes
+              Results = results
+              Distinct = query.Distinct
               From = qFrom
               Where = qWhere
               GroupBy = qGroupBy
-              Results = results
               OrderLimit = orderLimit
               Extra = ObjectMap.singleton extra }
 
@@ -3746,6 +3747,7 @@ and private relabelBoundAttribute (attr: ResolvedBoundAttribute) : ResolvedBound
 and private relabelSingleSelectExpr (select: ResolvedSingleSelectExpr) : ResolvedSingleSelectExpr =
     { Attributes = Map.map (fun name -> relabelAttribute) select.Attributes
       Results = Array.map relabelQueryResult select.Results
+      Distinct = select.Distinct
       From = Option.map relabelFromExpr select.From
       Where = Option.map relabelFieldExpr select.Where
       GroupBy = Array.map relabelFieldExpr select.GroupBy

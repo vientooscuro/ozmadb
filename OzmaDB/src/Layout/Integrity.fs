@@ -561,6 +561,7 @@ type private ConstraintUseNewConverter(constrEntityRef: ResolvedEntityRef) =
         let currWhere = addEntityChecks entitiesMap currWhere
 
         { Columns = Array.map useNewInSelectedColumn query.Columns
+          Distinct = query.Distinct
           From = from
           Where = Option.unionWith (curry SQL.VEAnd) currWhere extraWhere
           GroupBy = Array.map useNewInValueExpr query.GroupBy

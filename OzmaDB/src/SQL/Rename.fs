@@ -33,6 +33,7 @@ type private NaiveRenamer(renamesMap: RenamesMap) =
 
     and renameSingleSelectExpr (query: SingleSelectExpr) : SingleSelectExpr =
         { Columns = Array.map renameSelectedColumn query.Columns
+          Distinct = query.Distinct
           From = Option.map renameFromExpr query.From
           Where = Option.map renameValueExpr query.Where
           GroupBy = Array.map renameValueExpr query.GroupBy

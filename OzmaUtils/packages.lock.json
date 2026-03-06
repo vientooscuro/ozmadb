@@ -20,8 +20,8 @@
       "Newtonsoft.Json": {
         "type": "Direct",
         "requested": "[13.0.*, )",
-        "resolved": "13.0.3",
-        "contentHash": "HrC5BXdl00IP9zeV+0Z848QWPAoCr9P3bDEZguI+gkLcBKAOxix/tLEAAHC+UvDNPv4a2d18lOReHMOagPa+zQ=="
+        "resolved": "13.0.4",
+        "contentHash": "pdgNNMai3zv51W5aq268sujXUyx7SNdE2bj1wZcWjAQrKMFZV260lbqYop1d2GM67JI1huLRwxo9ZqnfF/lC6A=="
       },
       "YamlDotNet": {
         "type": "Direct",
@@ -29,7 +29,6 @@
         "resolved": "15.1.6",
         "contentHash": "T/cQEK/KHK96Q8kytJ4iUGDXg1/fj2Qtk6rCQeIlHYU1zTeyGVHW0QNZgREQyxZpygGMDMmrXNWt0sj5TsQnjA=="
       }
-    },
-    "net8.0/linux-x64": {}
+    }
   }
 }

@@ -2853,6 +2853,7 @@ type private QueryCompiler
 
         let query =
             { Columns = [||] // We fill columns after processing UNIONs, so that ordering and number of columns and meta-columns is the same everywhere.
+              Distinct = select.Distinct
               From = from
               Where = where
               GroupBy = groupBy

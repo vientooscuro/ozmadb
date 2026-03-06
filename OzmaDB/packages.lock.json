@@ -71,8 +71,8 @@
       "Microsoft.AspNetCore.Authentication.JwtBearer": {
         "type": "Direct",
         "requested": "[8.0.*, )",
-        "resolved": "8.0.12",
-        "contentHash": "Th1bIoe3lgQCtkZRzYpU3YruTIaa/C5jI6yJ7djXihtvHGc6WFl823Uh01P2ESbn2eIpgiEbwRw/szlPSPowDA==",
+        "resolved": "8.0.24",
+        "contentHash": "Uwr3m28coB7AIYn4CN/qlTh4FZTGMs51oSyXUyYKYHJTH1xCfnZOeaNe0T3qCKzYc8gvZJPZ9KzKLpJlAZ7mlQ==",
         "dependencies": {
           "Microsoft.IdentityModel.Protocols.OpenIdConnect": "7.1.2"
         }
@@ -101,8 +101,8 @@
       "NodaTime": {
         "type": "Direct",
         "requested": "[3.1.*, )",
-        "resolved": "3.1.13",
-        "contentHash": "futOqvxylgDoOHPYAzE847d24FnyS0HU4DBxDAZYBhr1ymWaOoTupzM7ZAW4Ml7+69tExKJ3LW8GTmUPM93tpw==",
+        "resolved": "3.1.14",
+        "contentHash": "AoLmMzcASZF/daMb4at16Q+WgH+ke7PfVBieETy0sSr2fdzaaPhhJ42UFGtqWVLzySYA8AnieWHu2qynHGatqw==",
         "dependencies": {
           "System.Runtime.CompilerServices.Unsafe": "4.7.1"
         }
@@ -120,8 +120,8 @@
       "Npgsql": {
         "type": "Direct",
         "requested": "[8.0.*, )",
-        "resolved": "8.0.6",
-        "contentHash": "KaS6CY5kY2Sd0P00MSeFcOI3t2DiQ4UWG8AuRpVOUeDWITOKfoEEG91DP3cmT6aerixPkjwKgXxnpDxIkDpO6g==",
+        "resolved": "8.0.8",
+        "contentHash": "1g7tA1easureueqyS5SqJtojI7FwEdw50UYTh0l576iWZNnyRyAVfFi1bJp4BzO8IwYodP8YCRp6ThNQvvBn8A==",
         "dependencies": {
           "Microsoft.Extensions.Logging.Abstractions": "8.0.0"
         }
@@ -151,21 +151,21 @@
       "Npgsql.Json.NET": {
         "type": "Direct",
         "requested": "[8.0.*, )",
-        "resolved": "8.0.6",
-        "contentHash": "oNl2iBOcmwXxlg1v4Xz9N2/CZbLOl2K0GnbXVrFeLIpO6C8uG9QXboBEQcqHP3OBmU//fDm23AcMu/N7iVGF5g==",
+        "resolved": "8.0.8",
+        "contentHash": "q02hKI7fMassUBpQv3ddy53BDDvq600fjMWVuRUsYQjoF738SjIHSqlAEEHKXLl1/90BHGZNdSNmoWlihawGTg==",
         "dependencies": {
           "Newtonsoft.Json": "13.0.3",
-          "Npgsql": "8.0.6"
+          "Npgsql": "8.0.8"
         }
       },
       "Npgsql.NodaTime": {
         "type": "Direct",
         "requested": "[8.0.*, )",
-        "resolved": "8.0.6",
-        "contentHash": "kCDZXabYVrlB6Aw4jXr9VVR9PmdIY8dMu5OE5k93DeT0IC2wfEbx4byl5bQer5IeOYqcwniTe13HOuGCNZ+bJA==",
+        "resolved": "8.0.8",
+        "contentHash": "FWn69S5nbKnjPSE2T+ka29rAAeAiFTtWvLHUu780f+IDunquMR6hU3Zku4fbGCK8UxGBVs4n7tORddzO9WHOUg==",
         "dependencies": {
           "NodaTime": "3.1.9",
-          "Npgsql": "8.0.6"
+          "Npgsql": "8.0.8"
         }
       },
       "prometheus-net.AspNetCore": {
@@ -221,11 +221,8 @@
       "System.Linq.Async": {
         "type": "Direct",
         "requested": "[6.0.*, )",
-        "resolved": "6.0.1",
-        "contentHash": "0YhHcaroWpQ9UCot3Pizah7ryAzQhNvobLMSxeDIGmnXfkQn8u5owvpOH0K6EVB+z9L7u6Cc4W17Br/+jyttEQ==",
-        "dependencies": {
-          "Microsoft.Bcl.AsyncInterfaces": "6.0.0"
-        }
+        "resolved": "6.0.3",
+        "contentHash": "hSHiq2m1ky7zUQgTp+/2h1K3lABIQ+GltRixoclHPg/Sc1vnfeS6g/Uy5moOVZKrZJdQiFPFZd6OobBp3tZcFg=="
       },
       "FsLexYacc.Runtime": {
         "type": "Transitive",
@@ -242,11 +239,6 @@
         "dependencies": {
           "FSharp.Core": "5.0.0"
         }
-      },
-      "Microsoft.Bcl.AsyncInterfaces": {
-        "type": "Transitive",
-        "resolved": "6.0.0",
-        "contentHash": "UcSjPsst+DfAdJGVDsu346FX0ci0ah+lw3WRtn18NUwEqRt70HaOQ7lI72vy3+1LxtqI3T5GWwV39rQSrCzAeg=="
       },
       "Microsoft.ClearScript.Core": {
         "type": "Transitive",
@@ -275,31 +267,31 @@
       },
       "Microsoft.EntityFrameworkCore": {
         "type": "Transitive",
-        "resolved": "8.0.12",
-        "contentHash": "oxZydJ7/1NdG2Tf6qHeTkcm2j2Nc+uHQy5mxrv2FmVFXt7MfkTMyCokcMeElrr7nAUAidrOdiZPVSpNMKkLbkQ==",
+        "resolved": "8.0.24",
+        "contentHash": "Jf82MqfFU3Nte4Cpmtq5HXhQfXHYhJawFawWuy281uiibg/Ch9z9D/gMnORFhjmGSxzSA4CmRaHwDm2lU9H/ZA==",
         "dependencies": {
-          "Microsoft.EntityFrameworkCore.Abstractions": "8.0.12",
-          "Microsoft.EntityFrameworkCore.Analyzers": "8.0.12",
+          "Microsoft.EntityFrameworkCore.Abstractions": "8.0.24",
+          "Microsoft.EntityFrameworkCore.Analyzers": "8.0.24",
           "Microsoft.Extensions.Caching.Memory": "8.0.1",
           "Microsoft.Extensions.Logging": "8.0.1"
         }
       },
       "Microsoft.EntityFrameworkCore.Abstractions": {
         "type": "Transitive",
-        "resolved": "8.0.12",
-        "contentHash": "A19COkZVUI3bNUdtWAgLvxzOXyW/gwJ1enmkHi0rgslPIAv9tFU0yEq4KNfmLoHf8kikYvC2DKYZo8vJvWzklA=="
+        "resolved": "8.0.24",
+        "contentHash": "epzWc4RnG6aQS+MfIK1gg1XbL8ZTYgKtW8L1lDVHG4C3nilLd6tX8moX6Sv8sXQkH/tMhWhT2e4Nm811kYeoxg=="
       },
       "Microsoft.EntityFrameworkCore.Analyzers": {
         "type": "Transitive",
-        "resolved": "8.0.12",
-        "contentHash": "irXnlkKHepepje6+ICaKpe/G4QnWi1G9Em9CmfqAEKb7OUTYaDQ2ieGps2Tl7/rblj5CKB0tDNI421f64x/Tqw=="
+        "resolved": "8.0.24",
+        "contentHash": "nuMx9iCGkZgHvPKlnrYBjlxRgy8VDe443H0PbiDUvxQ8+4nC5JYhqQ9u5lg+FssnTh+QyvwVVVHvkCyAnrpajA=="
       },
       "Microsoft.EntityFrameworkCore.Relational": {
         "type": "Transitive",
-        "resolved": "8.0.12",
-        "contentHash": "HqW1fvgb4hbzY7/06k047eXG0YnoB3j8A5hU9nyL5b7sW7sNsPhn0yw63tV0QrSpWD9fCkaFGEy+tYkuLIPJyw==",
+        "resolved": "8.0.24",
+        "contentHash": "QMGORS3ltx2RWHBCUcBjadS0eNYGkTGXsOdZf3oSM6pZuNBBl16z6gThA3a+BF8T5HY3jThxVDFKaPHxmpueXA==",
         "dependencies": {
-          "Microsoft.EntityFrameworkCore": "8.0.12",
+          "Microsoft.EntityFrameworkCore": "8.0.24",
           "Microsoft.Extensions.Configuration.Abstractions": "8.0.0"
         }
       },
@@ -559,8 +551,8 @@
       },
       "Newtonsoft.Json": {
         "type": "Transitive",
-        "resolved": "13.0.3",
-        "contentHash": "HrC5BXdl00IP9zeV+0Z848QWPAoCr9P3bDEZguI+gkLcBKAOxix/tLEAAHC+UvDNPv4a2d18lOReHMOagPa+zQ=="
+        "resolved": "13.0.4",
+        "contentHash": "pdgNNMai3zv51W5aq268sujXUyx7SNdE2bj1wZcWjAQrKMFZV260lbqYop1d2GM67JI1huLRwxo9ZqnfF/lC6A=="
       },
       "Pipelines.Sockets.Unofficial": {
         "type": "Transitive",
@@ -1545,7 +1537,7 @@
         }
       }
     },
-    "net8.0/linux-x64": {
+    "net8.0/osx-arm64": {
       "Microsoft.ClearScript.V8.Native.linux-x64": {
         "type": "Transitive",
         "resolved": "7.4.5",

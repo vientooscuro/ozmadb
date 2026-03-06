@@ -157,6 +157,7 @@ type private PermissionsApplier
             | _ -> failwith "SELECT annotation is required"
 
         { Columns = Array.map applyToSelectedColumn query.Columns
+          Distinct = query.Distinct
           From = from
           Where = where
           GroupBy = Array.map applyToValueExpr query.GroupBy
