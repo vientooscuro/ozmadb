@@ -1969,6 +1969,7 @@ type private QueryCompiler
                 | Some(FRSpecial special) -> SQL.VESpecialFunc(special, compArgs)
             | FEAggFunc(name, args) -> SQL.VEAggFunc(Map.find name allowedAggregateFunctions, compileAggExpr args)
             | FESubquery query -> SQL.VESubquery(compileSubSelectExpr query)
+            | FEExists query -> SQL.VEExists(compileSubSelectExpr query)
             | FEInheritedFrom(c, subEntityRef) -> compileTypeCheck true c subEntityRef
             | FEOfType(c, subEntityRef) -> compileTypeCheck false c subEntityRef
 

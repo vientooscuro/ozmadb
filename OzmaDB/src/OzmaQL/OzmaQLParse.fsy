@@ -283,6 +283,7 @@ let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSe
 %token PER
 %token ROW
 %token INTERNAL
+%token EXISTS
 %token FIELD
 %token DOMAIN
 %token TYPE
@@ -834,6 +835,7 @@ FieldExprMisc:
     | JsonObject                                { $1 }
     | JsonArray                                 { $1 }
     | SelectWithParens                          { FESubquery $1 }
+    | EXISTS SelectWithParens                   { FEExists $2 }
     | LEFT_PAREN FieldExpr RIGHT_PAREN          { $2 }
 
 AggFuncArgs:

@@ -798,6 +798,7 @@ and FieldExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
     | FEFunc of FunctionName * FieldExpr<'e, 'f>[]
     | FEAggFunc of FunctionName * AggExpr<'e, 'f>
     | FESubquery of SelectExpr<'e, 'f>
+    | FEExists of SelectExpr<'e, 'f>
     | FEInheritedFrom of 'f * SubEntityRef
     | FEOfType of 'f * SubEntityRef
 
@@ -867,6 +868,7 @@ and FieldExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
             sprintf "%s(%s)" (name.ToOzmaQLString()) (args |> Seq.map toOzmaQLString |> String.concat ", ")
         | FEAggFunc(name, args) -> sprintf "%s(%s)" (name.ToOzmaQLString()) (args.ToOzmaQLString())
         | FESubquery q -> sprintf "(%s)" (q.ToOzmaQLString())
+        | FEExists q -> sprintf "EXISTS (%s)" (q.ToOzmaQLString())
         | FEInheritedFrom(f, ref) -> sprintf "%s INHERITED FROM %s" (f.ToOzmaQLString()) (ref.Ref.ToOzmaQLString())
         | FEOfType(f, ref) -> sprintf "%s OFTYPE %s" (f.ToOzmaQLString()) (ref.Ref.ToOzmaQLString())
 
@@ -1521,6 +1523,7 @@ let rec mapFieldExpr (mapper: FieldExprMapper<'e1, 'f1, 'e2, 'f2>) : FieldExpr<'
         | FEFunc(name, args) -> FEFunc(name, Array.map traverse args)
         | FEAggFunc(name, args) -> FEAggFunc(name, mapAggExpr traverse (mapper.PreAggregate args))
         | FESubquery query -> FESubquery(mapper.Query query)
+        | FEExists query -> FEExists(mapper.Query query)
         | FEInheritedFrom(f, nam) ->
             let ref = mapper.FieldReference f
             FEInheritedFrom(ref, mapper.SubEntity SECInheritedFrom ref nam)
@@ -1637,6 +1640,7 @@ let mapTaskFieldExpr
                 return! Task.map (fun x -> FEAggFunc(name, x)) (mapTaskAggExpr traverse args1)
             }
         | FESubquery query -> Task.map FESubquery (mapper.Query query)
+        | FEExists query -> Task.map FEExists (mapper.Query query)
         | FEInheritedFrom(f, nam) ->
             task {
                 let! field = mapper.FieldReference f
@@ -1771,6 +1775,7 @@ let iterFieldExpr (mapper: FieldExprIter<'e, 'f>) : FieldExpr<'e, 'f> -> unit =
             mapper.Aggregate args
             iterAggExpr traverse args
         | FESubquery query -> mapper.Query query
+        | FEExists query -> mapper.Query query
         | FEInheritedFrom(f, nam) ->
             mapper.FieldReference f
             mapper.SubEntity SECInheritedFrom f nam

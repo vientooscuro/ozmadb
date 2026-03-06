@@ -2743,6 +2743,9 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
             | FESubquery query ->
                 let newQuery = resolveQuery query
                 (emptyCondTypeContexts, FESubquery newQuery)
+            | FEExists query ->
+                let newQuery = resolveQuery query
+                (emptyCondTypeContexts, FEExists newQuery)
 
         let typeContexts =
             { Map = ctx.Types

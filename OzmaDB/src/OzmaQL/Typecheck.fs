@@ -257,6 +257,7 @@ type private Typechecker(layout: ILayoutBits) =
             Some <| checkFunc name argTypes
         | FEAggFunc(name, args) -> raisef ViewTypecheckException "Not implemented"
         | FESubquery query -> raisef ViewTypecheckException "Not implemented"
+        | FEExists query -> Some(FTScalar SFTBool)
         | FEInheritedFrom(f, nam) -> Some(FTScalar SFTBool)
         | FEOfType(f, nam) -> Some(FTScalar SFTBool)
 

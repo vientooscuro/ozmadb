@@ -613,6 +613,7 @@ type ValueExpr =
     | VECase of (ValueExpr * ValueExpr)[] * (ValueExpr option)
     | VEArray of ValueExpr[]
     | VESubquery of SelectExpr
+    | VEExists of SelectExpr
 
     override this.ToString() = this.ToSQLString()
 
@@ -664,6 +665,7 @@ type ValueExpr =
             String.concatWithWhitespaces [ "CASE"; esStr; elsStr; "END" ]
         | VEArray vals -> sprintf "ARRAY[%s]" (vals |> Seq.map toSQLString |> String.concat ", ")
         | VESubquery query -> sprintf "(%s)" (query.ToSQLString())
+        | VEExists query -> sprintf "EXISTS (%s)" (query.ToSQLString())
 
     interface ISQLString with
         member this.ToSQLString() = this.ToSQLString()
@@ -1298,6 +1300,7 @@ let rec genericMapValueExpr (mapper: ValueExprGenericMapper) : ValueExpr -> Valu
             VECase(es', els')
         | VEArray vals -> VEArray <| Array.map traverse vals
         | VESubquery query -> VESubquery(mapper.Query query)
+        | VEExists query -> VEExists(mapper.Query query)
 
     traverse
 
@@ -1402,6 +1405,7 @@ let rec iterValueExpr (mapper: ValueExprIter) : ValueExpr -> unit =
             Option.iter traverse els
         | VEArray vals -> Array.iter traverse vals
         | VESubquery query -> mapper.Query query
+        | VEExists query -> mapper.Query query
 
     traverse
 
