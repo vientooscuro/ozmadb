@@ -1537,7 +1537,7 @@
         }
       }
     },
-    "net8.0/osx-arm64": {
+    "net8.0/linux-x64": {
       "Microsoft.ClearScript.V8.Native.linux-x64": {
         "type": "Transitive",
         "resolved": "7.4.5",

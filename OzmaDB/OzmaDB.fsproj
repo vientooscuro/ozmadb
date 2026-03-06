@@ -15,6 +15,7 @@
     <EnableDefaultContentItems>false</EnableDefaultContentItems>
 
     <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
     <PublishSingleFile>true</PublishSingleFile>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
