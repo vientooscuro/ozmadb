@@ -145,6 +145,7 @@ type private UsedReferencesBuilder(layout: ILayoutBits) =
     and buildForTableExpr: ResolvedTableExpr -> unit =
         function
         | TESelect subsel -> buildForSelectExpr subsel
+        | TETableFunc(name, args) -> Array.iter (ignore << buildForFieldExpr) args
         | TEDomain(dom, flags) ->
             if flags.AsRoot then
                 hasRestrictedEntities <- true

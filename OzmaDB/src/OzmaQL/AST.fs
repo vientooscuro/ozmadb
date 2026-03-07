@@ -1120,6 +1120,7 @@ and [<NoEquality; NoComparison>] SetOperationExpr<'e, 'f> when 'e :> IOzmaQLName
 
 and [<NoEquality; NoComparison>] TableExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
     | TESelect of SelectExpr<'e, 'f>
+    | TETableFunc of FunctionName * FieldExpr<'e, 'f>[]
     | TEDomain of 'f * DomainExprInfo
     | TEFieldDomain of 'e * FieldName * DomainExprInfo
     | TETypeDomain of FieldType<'e> * DomainExprInfo
@@ -1129,6 +1130,9 @@ and [<NoEquality; NoComparison>] TableExpr<'e, 'f> when 'e :> IOzmaQLName and 'f
     member this.ToOzmaQLString() =
         match this with
         | TESelect sel -> sprintf "(%O)" sel
+        | TETableFunc(name, args) ->
+            let argsStr = args |> Seq.map toOzmaQLString |> String.concat ", "
+            sprintf "%s(%s)" (toOzmaQLString name) argsStr
         | TEDomain(ref, info) ->
             let domainStr = sprintf "DOMAIN OF %s" (toOzmaQLString ref)
             let infoStr = toOzmaQLString info

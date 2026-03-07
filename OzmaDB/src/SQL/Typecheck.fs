@@ -179,6 +179,14 @@ let private toCharSignatures: FunctionSignaturesMap =
     |> Seq.map (fun typ -> ([ typ; STString ], STString))
     |> funScalarsToSignatures
 
+let private generateSeriesSignatures: FunctionSignaturesMap =
+    funScalarsToSignatures
+        [ ([ STInt; STInt ], STInt)
+          ([ STInt; STInt; STInt ], STInt)
+          ([ STDecimal; STDecimal ], STDecimal)
+          ([ STDecimal; STDecimal; STDecimal ], STDecimal)
+          ([ STDateTime; STDateTime; STInterval ], STDateTime) ]
+
 let sqlKnownFunctions: Map<FunctionName, FunctionSignaturesMap> =
     Map.ofList
         [ // Common
@@ -212,7 +220,8 @@ let sqlKnownFunctions: Map<FunctionName, FunctionSignaturesMap> =
                  ([ STString; STDateTime ], STDateTime)
                  ([ STString; STInterval ], STInterval) ])
           (SQLName "isfinite",
-           funScalarsToSignatures [ ([ STDate ], STBool); ([ STDateTime ], STBool); ([ STDate ], STBool) ]) ]
+           funScalarsToSignatures [ ([ STDate ], STBool); ([ STDateTime ], STBool); ([ STDate ], STBool) ])
+          (SQLName "generate_series", generateSeriesSignatures) ]
 
 let private binScalarsToSignatures (signs: ((SimpleType * SimpleType) * SimpleType) seq) : BinaryOperatorSignaturesMap =
     signs

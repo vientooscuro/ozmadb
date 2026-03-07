@@ -52,10 +52,16 @@ let allowedFunctions: Map<FunctionName, FunctionRepr> =
           (OzmaQLName "date_part", FRFunction <| SQL.SQLName "date_part")
           (OzmaQLName "date_trunc", FRFunction <| SQL.SQLName "date_trunc")
           (OzmaQLName "isfinite", FRFunction <| SQL.SQLName "isfinite")
+          (OzmaQLName "generate_series", FRFunction <| SQL.SQLName "generate_series")
           // Special
           (OzmaQLName "coalesce", FRSpecial SQL.SFCoalesce)
           (OzmaQLName "least", FRSpecial SQL.SFLeast)
           (OzmaQLName "greatest", FRSpecial SQL.SFGreatest) ]
+
+// Whitelist of functions that can appear in FROM as table functions.
+// Currently we support single-column table functions.
+let allowedTableFunctions: Map<FunctionName, SQL.SQLName> =
+    Map.ofList [ (OzmaQLName "generate_series", SQL.SQLName "generate_series") ]
 
 let private checkAllowedFunctions () =
     allowedFunctions

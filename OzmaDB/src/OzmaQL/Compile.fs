@@ -2976,6 +2976,45 @@ type private QueryCompiler
 
         match tableExpr.Expression with
         | TESelect subsel -> compileSubSelect tableExpr.Alias subsel
+        | TETableFunc(name, args) ->
+            let mutable joinPaths =
+                { emptyJoinPaths with
+                    NextJoinId = nextJoinId
+                    Namespace = ctx.JoinNamespace }
+
+            let compiledArgs =
+                Array.map
+                    (fun arg ->
+                        let (newPaths, compiled) = compileFieldExpr ctx joinPaths arg
+                        joinPaths <- newPaths
+                        compiled)
+                    args
+
+            let compiledAlias =
+                { Name = compileName tableExpr.Alias.Name
+                  Columns = Option.map (Array.map compileName) tableExpr.Alias.Fields }
+                : SQL.TableAlias
+
+            let compiledTableExpr =
+                { Alias = Some compiledAlias
+                  Expression = SQL.TEFunc(compileName name, compiledArgs)
+                  Lateral = tableExpr.Lateral }
+                : SQL.FromTableExpr
+
+            let fromInfo =
+                { FromType = FTSubquery emptySelectInfo
+                  Entity = None
+                  MainId = None
+                  MainSubEntity = None
+                  Attributes = emptyEntityAttributes }
+
+            let ret = SQL.FTableExpr compiledTableExpr
+
+            let res =
+                { Tables = Map.singleton compiledAlias.Name fromInfo
+                  Joins = joinPaths }
+
+            (res, ret)
         | TEDomain(ref, flags) ->
             let fieldType = resolvedRefType layout ref |> Option.get
             compileDomainValues fieldType flags

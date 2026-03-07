@@ -46,6 +46,9 @@ let private allowedPragmas: Set<PragmaName> =
           OzmaQLName "enable_sort"
           OzmaQLName "enable_tidscan" ]
 
+let private allowedTableFunctions: Map<FunctionName, SQL.FunctionName> =
+    Map.ofList [ (OzmaQLName "generate_series", SQL.SQLName "generate_series") ]
+
 let fieldValueType: FieldValue -> ResolvedFieldType option =
     function
     | FInt _ -> Some <| FTScalar SFTInt
@@ -939,6 +942,7 @@ and private tryFindMainEntityTableExpr
     | TESelect sel ->
         tryFindMainEntityExpr ctes currentCte sel
         |> Option.map (mapRecursiveValue (fun res -> res.Entity))
+    | TETableFunc(name, args) -> None
     | TEDomain(f, info) -> None
     | TEFieldDomain(e, f, info) -> None
     | TETypeDomain(typ, info) -> None
@@ -2194,6 +2198,28 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
         | FUserViewRefArray vals -> FUserViewRefArray(Array.map resolveUserViewRef vals)
         | v -> v
 
+    let rec tryInferResolvedFieldExprType (expr: ResolvedFieldExpr) : ResolvedFieldType option =
+        match expr with
+        | FEValue value -> fieldValueType value
+        | FERef r ->
+            ObjectMap.tryFindType<FieldRefMeta> r.Extra
+            |> Option.bind (fun info -> info.Type)
+        | FECast(_, typ) -> Some <| getResolvedFieldType typ
+        | FEFunc(name, args) ->
+            match Map.tryFind (SQL.SQLName <| string name) SQL.sqlKnownFunctions with
+            | Some overloads ->
+                let sqlArgs =
+                    args
+                    |> Array.map (fun arg ->
+                        tryInferResolvedFieldExprType arg
+                        |> Option.map compileFieldType)
+
+                match SQL.findFunctionOverloads overloads sqlArgs with
+                | None -> None
+                | Some(_, ret) -> Some <| decompileFieldType ret
+            | None -> None
+        | _ -> None
+
     let applyAlias (alias: EntityAlias) (results: SubqueryFields) : SubqueryFields =
         checkName alias.Name
 
@@ -3215,6 +3241,83 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
 
                     let fromInfo = unionFromExprInfo fromInfo myFromInfo
                     (fromInfo, TESelect newQ)
+                | TETableFunc(funcName, args) ->
+                    let sqlFuncName =
+                        match Map.tryFind funcName allowedTableFunctions with
+                        | Some name -> name
+                        | None -> raisef QueryResolveException "Unknown table function: %O" funcName
+
+                    if Array.length args < 2 || Array.length args > 3 then
+                        raisef
+                            QueryResolveException
+                            "Invalid generate_series arguments count: expected 2 or 3, got %i"
+                            (Array.length args)
+
+                    let mutable argsInfo = emptySubqueryExprInfo
+
+                    let newArgs =
+                        Array.map
+                            (fun arg ->
+                                let (info, newArg) = resolveFieldExpr localCtx arg
+
+                                if info.Info.Flags.HasAggregates then
+                                    raisef QueryResolveException "Cannot use aggregate functions in table function arguments"
+
+                                argsInfo <- unionSubqueryExprInfo argsInfo (resolvedToSubqueryExprInfo info.Info)
+                                newArg)
+                            args
+
+                    let fieldName =
+                        match tab.Alias.Fields with
+                        | None -> funcName
+                        | Some [| name |] -> name
+                        | Some fields ->
+                            raisef
+                                QueryResolveException
+                                "Table function alias must define exactly one column, got %i"
+                                (Array.length fields)
+
+                    let returnType =
+                        let sqlArgs =
+                            newArgs
+                            |> Array.map (fun arg ->
+                                tryInferResolvedFieldExprType arg
+                                |> Option.map compileFieldType)
+
+                        let overloads = Map.find sqlFuncName SQL.sqlKnownFunctions
+
+                        match SQL.findFunctionOverloads overloads sqlArgs with
+                        | None ->
+                            raisef
+                                QueryResolveException
+                                "Couldn't deduce table function overload: %O(%s)"
+                                funcName
+                                (newArgs |> Seq.map string |> String.concat ", ")
+                        | Some(_, ret) -> Some <| decompileFieldType ret
+
+                    let fieldsMap =
+                        Map.singleton
+                            fieldName
+                            { Bound = None
+                              Type = returnType
+                              FieldAttributes = Set.empty }
+
+                    let mappingRef = { Schema = None; Name = tab.Alias.Name }: EntityRef
+                    let newMapping = fieldsToFieldMapping fromEntityId (Some mappingRef) None fieldsMap
+
+                    let entityInfo =
+                        { Schema = None
+                          EntityAttributes = Set.empty
+                          Id = fromEntityId }
+
+                    let myFromInfo =
+                        { Entities = Map.singleton tab.Alias.Name entityInfo
+                          Fields = newMapping
+                          ExprInfo = argsInfo
+                          Types = Map.empty }
+
+                    let fromInfo = unionFromExprInfo fromInfo myFromInfo
+                    (fromInfo, TETableFunc(funcName, newArgs))
                 | TEDomain(fieldRef, flags) ->
                     let (info, newRef) = resolveReference localCtx Map.empty fieldRef
 
@@ -3769,6 +3872,7 @@ and private relabelSingleSelectExpr (select: ResolvedSingleSelectExpr) : Resolve
 and private relabelTableExpr: ResolvedTableExpr -> ResolvedTableExpr =
     function
     | TESelect subsel -> TESelect <| relabelSelectExpr subsel
+    | TETableFunc(name, args) -> TETableFunc(name, Array.map relabelFieldExpr args)
     | TEDomain(dom, flags) -> TEDomain(dom, flags)
     | TEFieldDomain(entity, field, flags) -> TEFieldDomain(entity, field, flags)
     | TETypeDomain(ftype, flags) -> TETypeDomain(ftype, flags)
