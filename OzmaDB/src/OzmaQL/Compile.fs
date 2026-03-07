@@ -1897,6 +1897,7 @@ type private QueryCompiler
             | FENotInQuery(a, query) -> SQL.VENotInQuery(traverse a, compileSubSelectExpr query)
             | FEAny(e, op, arr) -> SQL.VEAny(traverse e, compileBinaryOp op, traverse arr)
             | FEAll(e, op, arr) -> SQL.VEAll(traverse e, compileBinaryOp op, traverse arr)
+            | FEArrayIndex(arr, idx) -> SQL.VEArrayIndex(traverse arr, traverse idx)
             | FECast(e, typ) ->
                 SQL.VECast(
                     traverse e,

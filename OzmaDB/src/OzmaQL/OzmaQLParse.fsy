@@ -836,6 +836,7 @@ FieldExprMisc:
     | FieldExprMisc DIVIDE AnyAllOp             { $3 BODivide $1 }
     | FieldExprMisc MOD AnyAllOp                { $3 BOMod $1 }
 
+    | FieldExprMisc LEFT_BRACKET FieldExpr RIGHT_BRACKET { FEArrayIndex($1, $3) }
     | FieldExprMisc IN FieldInSource            { inExpr FEIn FEInQuery $1 $3 }
     | FieldExprMisc NOT IN FieldInSource        { inExpr FENotIn FENotInQuery $1 $4 }
     | FieldExprMisc DOUBLE_COLON ExprFieldType  { FECast ($1, $3) }

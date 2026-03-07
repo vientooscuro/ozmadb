@@ -2205,6 +2205,10 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
         | FERef r ->
             ObjectMap.tryFindType<FieldRefMeta> r.Extra
             |> Option.bind (fun info -> info.Type)
+        | FEArrayIndex(arr, idx) ->
+            match (tryInferResolvedFieldExprType arr, tryInferResolvedFieldExprType idx) with
+            | (Some(FTArray typ), Some(FTScalar SFTInt)) -> Some(FTScalar typ)
+            | _ -> None
         | FECast(_, typ) -> Some <| getResolvedFieldType typ
         | FEFunc(name, args) ->
             match Map.tryFind (SQL.SQLName <| string name) SQL.sqlKnownFunctions with
@@ -2797,6 +2801,10 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                 let (typeCtxs, newE) = traverse outerTypeCtxs e
                 let (typeCtxs, newArr) = traverse outerTypeCtxs arr
                 (emptyCondTypeContexts, FEAll(newE, op, newArr))
+            | FEArrayIndex(arr, idx) ->
+                let (typeCtxs, newArr) = traverse outerTypeCtxs arr
+                let (typeCtxs, newIdx) = traverse outerTypeCtxs idx
+                (emptyCondTypeContexts, FEArrayIndex(newArr, newIdx))
             | FECast(e, typ) ->
                 let (typeCtxs, newE) = traverse outerTypeCtxs e
                 (emptyCondTypeContexts, FECast(newE, resolveCastFieldType typ))

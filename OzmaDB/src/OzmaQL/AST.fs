@@ -831,6 +831,7 @@ and FieldExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
     | FENotInQuery of FieldExpr<'e, 'f> * SelectExpr<'e, 'f>
     | FEAny of FieldExpr<'e, 'f> * BinaryOperator * FieldExpr<'e, 'f>
     | FEAll of FieldExpr<'e, 'f> * BinaryOperator * FieldExpr<'e, 'f>
+    | FEArrayIndex of FieldExpr<'e, 'f> * FieldExpr<'e, 'f>
     | FECast of FieldExpr<'e, 'f> * FieldType<'e>
     | FEIsNull of FieldExpr<'e, 'f>
     | FEIsNotNull of FieldExpr<'e, 'f>
@@ -874,6 +875,7 @@ and FieldExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
             sprintf "(%s) %s ANY (%s)" (e.ToOzmaQLString()) (op.ToOzmaQLString()) (arr.ToOzmaQLString())
         | FEAll(e, op, arr) ->
             sprintf "(%s) %s ALL (%s)" (e.ToOzmaQLString()) (op.ToOzmaQLString()) (arr.ToOzmaQLString())
+        | FEArrayIndex(arr, idx) -> sprintf "(%s)[%s]" (arr.ToOzmaQLString()) (idx.ToOzmaQLString())
         | FECast(e, typ) -> sprintf "(%s) :: %s" (e.ToOzmaQLString()) (typ.ToOzmaQLString())
         | FEIsNull e -> sprintf "(%s) IS NULL" (e.ToOzmaQLString())
         | FEIsNotNull e -> sprintf "(%s) IS NOT NULL" (e.ToOzmaQLString())
@@ -1625,6 +1627,7 @@ let rec mapFieldExpr (mapper: FieldExprMapper<'e1, 'f1, 'e2, 'f2>) : FieldExpr<'
         | FENotInQuery(e, query) -> FENotInQuery(traverse e, mapper.Query query)
         | FEAny(e, op, arr) -> FEAny(traverse e, op, traverse arr)
         | FEAll(e, op, arr) -> FEAll(traverse e, op, traverse arr)
+        | FEArrayIndex(arr, idx) -> FEArrayIndex(traverse arr, traverse idx)
         | FECast(e, typ) -> FECast(traverse e, mapFieldType mapper.EntityReference typ)
         | FEIsNull e -> FEIsNull(traverse e)
         | FEIsNotNull e -> FEIsNotNull(traverse e)
@@ -1785,6 +1788,7 @@ let mapTaskFieldExpr
         | FENotInQuery(e, query) -> Task.map2 (curry FENotInQuery) (traverse e) (mapper.Query query)
         | FEAny(e, op, arr) -> Task.map2 (fun e arr -> FEAny(e, op, arr)) (traverse e) (traverse arr)
         | FEAll(e, op, arr) -> Task.map2 (fun e arr -> FEAll(e, op, arr)) (traverse e) (traverse arr)
+        | FEArrayIndex(arr, idx) -> Task.map2 (curry FEArrayIndex) (traverse arr) (traverse idx)
         | FECast(e, typ) ->
             Task.map2 (fun e typ -> FECast(e, typ)) (traverse e) (mapTaskFieldType mapper.EntityReference typ)
         | FEIsNull e -> Task.map FEIsNull (traverse e)
@@ -1938,6 +1942,9 @@ let iterFieldExpr (mapper: FieldExprIter<'e, 'f>) : FieldExpr<'e, 'f> -> unit =
         | FEAll(e, op, arr) ->
             traverse e
             traverse arr
+        | FEArrayIndex(arr, idx) ->
+            traverse arr
+            traverse idx
         | FECast(e, typ) ->
             iterFieldType mapper.EntityReference typ
             traverse e

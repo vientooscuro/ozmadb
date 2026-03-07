@@ -55,6 +55,7 @@ let allowedFunctions: Map<FunctionName, FunctionRepr> =
           (OzmaQLName "generate_series", FRFunction <| SQL.SQLName "generate_series")
           // Special
           (OzmaQLName "coalesce", FRSpecial SQL.SFCoalesce)
+          (OzmaQLName "nullif", FRSpecial SQL.SFNullIf)
           (OzmaQLName "least", FRSpecial SQL.SFLeast)
           (OzmaQLName "greatest", FRSpecial SQL.SFGreatest) ]
 
@@ -91,6 +92,22 @@ let private checkFunc (name: FunctionName) (args: (ResolvedFieldType option) seq
             match SQL.findFunctionOverloads overloads sqlArgs with
             | None -> raisef ViewTypecheckException "Couldn't deduce function overload"
             | Some(typs, ret) -> decompileFieldType ret
+        | Some(FRSpecial SQL.SFNullIf) ->
+            let arrArgs = args |> Seq.toArray
+
+            match arrArgs with
+            | [| firstArg; secondArg |] ->
+                let overloads = SQL.binaryOperatorSignature SQL.BOEq
+
+                match
+                    SQL.findBinaryOpOverloads
+                        overloads
+                        (Option.map compileFieldType firstArg)
+                        (Option.map compileFieldType secondArg)
+                with
+                | None -> raisef ViewTypecheckException "Cannot compare NULLIF arguments"
+                | Some((firstTyp, _), _) -> decompileFieldType firstTyp
+            | _ -> raisef ViewTypecheckException "NULLIF expects exactly two arguments"
         | Some(FRSpecial SQL.SFLeast)
         | Some(FRSpecial SQL.SFGreatest)
         | Some(FRSpecial SQL.SFCoalesce) ->
@@ -206,6 +223,16 @@ type private Typechecker(layout: ILayoutBits) =
 
         scalarBool
 
+    and typecheckArrayIndex (arr: ResolvedFieldExpr) (idx: ResolvedFieldExpr) : ResolvedFieldType =
+        let tarr = typecheckFieldExpr arr
+        let tidx = typecheckFieldExpr idx
+        ignore <| checkBinaryOp BOEq tidx (Some(FTScalar SFTInt))
+
+        match tarr with
+        | Some(FTArray typ) -> FTScalar typ
+        | Some(FTScalar typ) -> raisef ViewTypecheckException "Array expected, %O found" typ
+        | None -> raisef ViewTypecheckException "Could not infer array type in index expression"
+
     and typecheckCase
         (es: (ResolvedFieldExpr * ResolvedFieldExpr)[])
         (els: ResolvedFieldExpr option)
@@ -260,6 +287,7 @@ type private Typechecker(layout: ILayoutBits) =
             Some <| checkBinaryOp op ta tb
         | FEAll(e, op, arr) -> Some <| typecheckInArray e op arr
         | FEAny(e, op, arr) -> Some <| typecheckInArray e op arr
+        | FEArrayIndex(arr, idx) -> Some <| typecheckArrayIndex arr idx
         | FESimilarTo(e, pat) -> Some <| typecheckLike e pat
         | FENotSimilarTo(e, pat) -> Some <| typecheckLike e pat
         | FEDistinct(a, b) -> Some <| typecheckEqLogical a b

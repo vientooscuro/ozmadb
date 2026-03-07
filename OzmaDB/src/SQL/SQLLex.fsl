@@ -96,6 +96,7 @@ rule tokenizeSQL = parse
     | e l s e         { Parse.ELSE }
     | e n d           { Parse.END }
     | c o a l e s c e { Parse.COALESCE }
+    | n u l l i f     { Parse.NULLIF }
     | g r e a t e s t { Parse.GREATEST }
     | l e a s t       { Parse.LEAST }
     | l i k e         { Parse.LIKE }

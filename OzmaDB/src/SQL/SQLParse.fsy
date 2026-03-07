@@ -69,6 +69,7 @@ let private narrowInt (i : int64) =
 %token ELSE
 %token END
 %token COALESCE
+%token NULLIF
 %token GREATEST
 %token LEAST
 %token ARRAY
@@ -198,10 +199,13 @@ ValueExprMisc:
     | ValueExprMisc DIVIDE AnyAllOp                   { $3 BODivide $1 }
     | ValueExprMisc MOD AnyAllOp                      { $3 BOMod $1 }
 
+    | ValueExprMisc LEFT_BRACKET ValueExpr RIGHT_BRACKET { VEArrayIndex($1, $3) }
     | ValueExprMisc IN ParenedNonEmptyExprList        { VEIn ($1, $3) }
     | ValueExprMisc NOT IN ParenedNonEmptyExprList    { VENotIn ($1, $4) }
     | ValueExprMisc DOUBLE_COLON ValueType            { VECast ($1, $3) }
     | COALESCE ParenedNonEmptyExprList                { VESpecialFunc (SFCoalesce, $2) }
+    | NULLIF LEFT_PAREN ValueExpr COMMA ValueExpr RIGHT_PAREN
+                                                      { VESpecialFunc (SFNullIf, [| $3; $5 |]) }
     | GREATEST ParenedNonEmptyExprList                { VESpecialFunc (SFGreatest, $2) }
     | LEAST ParenedNonEmptyExprList                   { VESpecialFunc (SFLeast, $2) }
     | CaseExpr                                        { $1 }

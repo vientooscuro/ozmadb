@@ -475,6 +475,7 @@ type BinaryOperator =
 [<NoEquality; NoComparison>]
 type SpecialFunction =
     | SFCoalesce
+    | SFNullIf
     | SFGreatest
     | SFLeast
 
@@ -483,6 +484,7 @@ type SpecialFunction =
     member this.ToSQLString() =
         match this with
         | SFCoalesce -> "COALESCE"
+        | SFNullIf -> "NULLIF"
         | SFGreatest -> "GREATEST"
         | SFLeast -> "LEAST"
 
@@ -602,6 +604,7 @@ type ValueExpr =
     | VENotDistinct of ValueExpr * ValueExpr
     | VEAny of ValueExpr * BinaryOperator * ValueExpr
     | VEAll of ValueExpr * BinaryOperator * ValueExpr
+    | VEArrayIndex of ValueExpr * ValueExpr
     | VESimilarTo of ValueExpr * ValueExpr
     | VENotSimilarTo of ValueExpr * ValueExpr
     | VEIn of ValueExpr * ValueExpr[]
@@ -638,6 +641,7 @@ type ValueExpr =
         | VENotDistinct(a, b) -> sprintf "(%s) IS NOT DISTINCT FROM (%s)" (a.ToSQLString()) (b.ToSQLString())
         | VEAny(e, op, arr) -> sprintf "(%s) %s ANY (%s)" (e.ToSQLString()) (op.ToSQLString()) (arr.ToSQLString())
         | VEAll(e, op, arr) -> sprintf "(%s) %s ALL (%s)" (e.ToSQLString()) (op.ToSQLString()) (arr.ToSQLString())
+        | VEArrayIndex(arr, idx) -> sprintf "(%s)[%s]" (arr.ToSQLString()) (idx.ToSQLString())
         | VESimilarTo(e, pat) -> sprintf "(%s) SIMILAR TO (%s)" (e.ToSQLString()) (pat.ToSQLString())
         | VENotSimilarTo(e, pat) -> sprintf "(%s) NOT SIMILAR TO (%s)" (e.ToSQLString()) (pat.ToSQLString())
         | VEIn(e, vals) ->
@@ -1346,6 +1350,7 @@ let rec genericMapValueExpr (mapper: ValueExprGenericMapper) : ValueExpr -> Valu
         | VEBinaryOp(a, op, b) -> VEBinaryOp(traverse a, op, traverse b)
         | VEAny(a, op, b) -> VEAny(traverse a, op, traverse b)
         | VEAll(a, op, b) -> VEAll(traverse a, op, traverse b)
+        | VEArrayIndex(arr, idx) -> VEArrayIndex(traverse arr, traverse idx)
         | VEDistinct(a, b) -> VEDistinct(traverse a, traverse b)
         | VENotDistinct(a, b) -> VENotDistinct(traverse a, traverse b)
         | VESimilarTo(e, pat) -> VESimilarTo(traverse e, traverse pat)
@@ -1471,6 +1476,9 @@ let rec iterValueExpr (mapper: ValueExprIter) : ValueExpr -> unit =
         | VEAll(e, op, arr) ->
             traverse e
             traverse arr
+        | VEArrayIndex(arr, idx) ->
+            traverse arr
+            traverse idx
         | VESimilarTo(e, pat) ->
             traverse e
             traverse pat

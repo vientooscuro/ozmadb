@@ -154,6 +154,7 @@ let private normalizeLocalExpr: ValueExpr -> ValueExpr =
         | VENotIn(e, vals) -> normalizeIn VEAll (traverse e) BONotEq (Array.map traverse vals)
         | VEAny(e, op, arr) -> VEAny(traverse e, op, traverse arr)
         | VEAll(e, op, arr) -> VEAll(traverse e, op, traverse arr)
+        | VEArrayIndex(arr, idx) -> VEArrayIndex(traverse arr, traverse idx)
         | VEInQuery(e, query) -> failwithf "Invalid subquery in local expression: %O" query
         | VENotInQuery(e, query) -> failwithf "Invalid subquery in local expression: %O" query
         | VEFunc(name, args) -> VEFunc(name, Array.map traverse args)

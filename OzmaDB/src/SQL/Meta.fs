@@ -127,6 +127,7 @@ let private castLocalExpr: ValueExpr -> ValueExpr =
         | VENotIn(e, vals) -> VENotIn(traverse e, Array.map traverse vals)
         | VEAny(e, op, arr) -> VEAny(traverse e, op, traverse arr)
         | VEAll(e, op, arr) -> VEAll(traverse e, op, traverse arr)
+        | VEArrayIndex(arr, idx) -> VEArrayIndex(traverse arr, traverse idx)
         | VEInQuery(e, query) -> raisef SQLMetaException "Invalid subquery in local expression: %O" query
         | VENotInQuery(e, query) -> raisef SQLMetaException "Invalid subquery in local expression: %O" query
         | VEFunc(name, args) -> VEFunc(name, Array.map traverse args)
