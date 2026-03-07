@@ -130,8 +130,7 @@ let private castLocalExpr: ValueExpr -> ValueExpr =
         | VEInQuery(e, query) -> raisef SQLMetaException "Invalid subquery in local expression: %O" query
         | VENotInQuery(e, query) -> raisef SQLMetaException "Invalid subquery in local expression: %O" query
         | VEFunc(name, args) -> VEFunc(name, Array.map traverse args)
-        | VEWindowFunc(name, args, _) ->
-            raisef SQLMetaException "Invalid window function in local expression: %O" name
+        | VEWindowFunc(name, args, _) -> raisef SQLMetaException "Invalid window function in local expression: %O" name
         | VESpecialFunc(name, args) -> VESpecialFunc(name, Array.map traverse args)
         | VEAggFunc(name, args) -> raisef SQLMetaException "Invalid aggregate function in local expression: %O" name
         | VECase(es, els) ->

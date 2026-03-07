@@ -2221,9 +2221,7 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
             | Some overloads ->
                 let sqlArgs =
                     args
-                    |> Array.map (fun arg ->
-                        tryInferResolvedFieldExprType arg
-                        |> Option.map compileFieldType)
+                    |> Array.map (fun arg -> tryInferResolvedFieldExprType arg |> Option.map compileFieldType)
 
                 match SQL.findFunctionOverloads overloads sqlArgs with
                 | None -> None

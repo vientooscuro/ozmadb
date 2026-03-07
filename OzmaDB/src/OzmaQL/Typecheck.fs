@@ -75,7 +75,9 @@ let private checkAllowedFunctions () =
             | _ -> None)
 
     let allAllowed = Seq.append normalAllowed (Map.values allowedWindowFunctions)
-    allAllowed |> Seq.forall (fun name -> Map.containsKey name SQL.sqlKnownFunctions)
+
+    allAllowed
+    |> Seq.forall (fun name -> Map.containsKey name SQL.sqlKnownFunctions)
 
 assert checkAllowedFunctions ()
 
@@ -289,7 +291,11 @@ type private Typechecker(layout: ILayoutBits) =
         | FEWindowFunc(name, args, window) ->
             Array.iter (typecheckFieldExpr >> ignore) args
             Array.iter (typecheckFieldExpr >> ignore) window.PartitionBy
-            Array.iter (fun (ord: WindowOrderColumn<EntityRef, LinkedBoundFieldRef>) -> typecheckFieldExpr ord.Expr |> ignore) window.OrderBy
+
+            Array.iter
+                (fun (ord: WindowOrderColumn<EntityRef, LinkedBoundFieldRef>) -> typecheckFieldExpr ord.Expr |> ignore)
+                window.OrderBy
+
             let argTypes = Seq.map typecheckFieldExpr args
             Some <| checkWindowFunc name argTypes
         | FEAggFunc(name, args) -> raisef ViewTypecheckException "Not implemented"
