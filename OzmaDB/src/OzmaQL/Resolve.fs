@@ -3247,12 +3247,6 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                         | Some name -> name
                         | None -> raisef QueryResolveException "Unknown table function: %O" funcName
 
-                    if Array.length args < 2 || Array.length args > 3 then
-                        raisef
-                            QueryResolveException
-                            "Invalid generate_series arguments count: expected 2 or 3, got %i"
-                            (Array.length args)
-
                     let mutable argsInfo = emptySubqueryExprInfo
 
                     let newArgs =
