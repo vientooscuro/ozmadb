@@ -417,7 +417,8 @@ type CompiledColumnInfo =
 
 // Evaluation of column-wise or global attributes
 type CompiledSingleRowExpr =
-    { ConstColumns: (CompiledColumnInfo * SQL.ValueExpr)[]
+    { CTEs: SQL.CommonTableExprs option
+      ConstColumns: (CompiledColumnInfo * SQL.ValueExpr)[]
       SingleRowColumns: (CompiledColumnInfo * SQL.ValueExpr)[] }
 
 type CompiledPragmasMap = Map<SQL.ParameterName, SQL.Value>
@@ -3906,7 +3907,8 @@ let compileViewExpr
         Seq.partition (fst >> columnIsConst) allNonPerRowColumns
 
     let attrQuery =
-        { ConstColumns = Array.ofSeq constColumns
+        { CTEs = expr.CTEs
+          ConstColumns = Array.ofSeq constColumns
           SingleRowColumns = Array.ofSeq singleRowColumns }
 
     let domains = mapDomainsFields getFinalName info.Domains

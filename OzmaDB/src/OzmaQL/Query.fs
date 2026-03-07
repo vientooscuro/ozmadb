@@ -195,7 +195,10 @@ let private getSingleRowQuery (viewExpr: CompiledViewExpr) : (ColumnType[] * SQL
                     |> Seq.map (fun (info, col) -> SQL.SCExpr(Some info.Name, col))
                     |> Seq.toArray }
 
-        let select = SQL.selectExpr (SQL.SSelect query)
+        let select =
+            { SQL.selectExpr (SQL.SSelect query) with
+                CTEs = viewExpr.SingleRowQuery.CTEs }
+
         Some(colTypes, select)
 
 let private parseAttributesResult
