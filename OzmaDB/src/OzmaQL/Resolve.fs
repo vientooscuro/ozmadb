@@ -2210,6 +2210,17 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
             | Some overloads ->
                 let sqlArgs =
                     args
+                    |> Array.map (fun arg -> tryInferResolvedFieldExprType arg |> Option.map compileFieldType)
+
+                match SQL.findFunctionOverloads overloads sqlArgs with
+                | None -> None
+                | Some(_, ret) -> Some <| decompileFieldType ret
+            | None -> None
+        | FEWindowFunc(name, args, _) ->
+            match Map.tryFind (SQL.SQLName <| string name) SQL.sqlKnownFunctions with
+            | Some overloads ->
+                let sqlArgs =
+                    args
                     |> Array.map (fun arg ->
                         tryInferResolvedFieldExprType arg
                         |> Option.map compileFieldType)
@@ -3255,7 +3266,9 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                                 let (info, newArg) = resolveFieldExpr localCtx arg
 
                                 if info.Info.Flags.HasAggregates then
-                                    raisef QueryResolveException "Cannot use aggregate functions in table function arguments"
+                                    raisef
+                                        QueryResolveException
+                                        "Cannot use aggregate functions in table function arguments"
 
                                 argsInfo <- unionSubqueryExprInfo argsInfo (resolvedToSubqueryExprInfo info.Info)
                                 newArg)
@@ -3274,9 +3287,7 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                     let returnType =
                         let sqlArgs =
                             newArgs
-                            |> Array.map (fun arg ->
-                                tryInferResolvedFieldExprType arg
-                                |> Option.map compileFieldType)
+                            |> Array.map (fun arg -> tryInferResolvedFieldExprType arg |> Option.map compileFieldType)
 
                         let overloads = Map.find sqlFuncName SQL.sqlKnownFunctions
 
