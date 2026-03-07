@@ -917,7 +917,7 @@ let private compileAggregateCheckConstraintCheck
     : SQL.SelectExpr =
     let entity = layout.FindEntity constrRef.Entity |> Option.get
     let fixedCheck = replaceEntityRefInExpr (Some <| relaxEntityRef entity.Root) check
-    let aggExpr = FEAggFunc(OzmaQLName "bool_and", AEAll [| fixedCheck |], None)
+    let aggExpr = FEAggFunc(OzmaQLName "bool_and", AEAll([| fixedCheck |], [||]), None)
 
     let result = queryColumnResult aggExpr
     let myFromEntity = fromEntity <| relaxEntityRef entity.Root
@@ -1355,7 +1355,7 @@ let private compileReferenceOfTypeCheck
 
         let singleSelect =
             { SQL.emptySingleSelectExpr with
-                Columns = [| SQL.SCExpr(None, SQL.VEAggFunc(SQL.SQLName "bool_and", SQL.AEAll [| checkExpr |], None)) |]
+                Columns = [| SQL.SCExpr(None, SQL.VEAggFunc(SQL.SQLName "bool_and", SQL.AEAll([| checkExpr |], [||]), None)) |]
                 From = Some join }
 
         Some <| SQL.selectExpr (SQL.SSelect singleSelect)

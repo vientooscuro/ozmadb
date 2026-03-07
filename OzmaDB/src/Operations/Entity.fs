@@ -525,7 +525,7 @@ let private runCheckExpr
     (cancellationToken: CancellationToken)
     : Task =
     task {
-        let aggExpr = FEAggFunc(OzmaQLName "bool_and", AEAll [| checkExpr |], None)
+        let aggExpr = FEAggFunc(OzmaQLName "bool_and", AEAll([| checkExpr |], [||]), None)
 
         let idsPlaceholder = PLocal <| OzmaQLName "ids"
         let idsArgumentInfo = requiredArgument <| FTArray(SFTReference(entityRef, None))

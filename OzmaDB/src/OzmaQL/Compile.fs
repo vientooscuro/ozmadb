@@ -1993,8 +1993,28 @@ type private QueryCompiler
 
         and compileAggExpr: ResolvedAggExpr -> SQL.AggExpr =
             function
-            | AEAll exprs -> SQL.AEAll(Array.map traverse exprs)
-            | AEDistinct expr -> SQL.AEDistinct(traverse expr)
+            | AEAll(exprs, orderBy) ->
+                let compiledOrderBy =
+                    Array.map
+                        (fun (ord: WindowOrderColumn<EntityRef, LinkedBoundFieldRef>) ->
+                            { Expr = traverse ord.Expr
+                              Order = Option.map compileOrder ord.Order
+                              Nulls = Option.map compileNullsOrder ord.Nulls }
+                            : SQL.WindowOrderColumn)
+                        orderBy
+
+                SQL.AEAll(Array.map traverse exprs, compiledOrderBy)
+            | AEDistinct(expr, orderBy) ->
+                let compiledOrderBy =
+                    Array.map
+                        (fun (ord: WindowOrderColumn<EntityRef, LinkedBoundFieldRef>) ->
+                            { Expr = traverse ord.Expr
+                              Order = Option.map compileOrder ord.Order
+                              Nulls = Option.map compileNullsOrder ord.Nulls }
+                            : SQL.WindowOrderColumn)
+                        orderBy
+
+                SQL.AEDistinct(traverse expr, compiledOrderBy)
             | AEStar -> SQL.AEStar
 
         let ret = traverse expr
@@ -2029,7 +2049,7 @@ type private QueryCompiler
             let innerResExpr = compileMappingValues valueRef mapping
 
             let resExpr =
-                SQL.VEAggFunc(SQL.SQLName "array_agg", SQL.AEAll [| innerResExpr |], None)
+                SQL.VEAggFunc(SQL.SQLName "array_agg", SQL.AEAll([| innerResExpr |], [||]), None)
 
             let singleSelectExpr =
                 { SQL.emptySingleSelectExpr with

@@ -137,11 +137,13 @@ let private coalesceJsonArray (exprs : ParsedFieldExpr list) : ParsedFieldExpr =
     | None -> List.toArray exprs |> FEJsonArray
     | Some vals -> vals |> Seq.map JToken.FromObject |> jsonArray :> JToken |> ComparableJToken |> FJson |> FEValue
 
-let private makeFunc (name : OzmaQLName) (exprs : ParsedFieldExpr array) : ParsedFieldExpr =
+let private makeFunc (name : OzmaQLName) (exprs : ParsedFieldExpr array) (filter : ParsedFieldExpr option) : ParsedFieldExpr =
     if Map.containsKey name allowedAggregateFunctions && Array.length exprs > 0 then
-        FEAggFunc (name, AEAll exprs, None)
+        FEAggFunc (name, AEAll(exprs, [||]), filter)
     else
-        FEFunc (name, exprs)
+        match filter with
+        | None -> FEFunc (name, exprs)
+        | Some _ -> failwithf "FILTER clause is only supported for aggregate functions %O" name
 
 let private makeExtractFunc (name : OzmaQLName) (part : string) (expr : ParsedFieldExpr) : ParsedFieldExpr =
     if name = OzmaQLName "extract" then
@@ -152,7 +154,7 @@ let private makeExtractFunc (name : OzmaQLName) (part : string) (expr : ParsedFi
 let private makeAggFunc (name : OzmaQLName) (expr : ParsedAggExpr) (filter : ParsedFieldExpr option) : ParsedFieldExpr =
     if Map.containsKey name allowedAggregateFunctions then
         match expr with
-        | AEAll exprs when Array.length exprs = 0 -> failwithf "No arguments to an aggregate function %O" name
+        | AEAll(exprs, _) when Array.length exprs = 0 -> failwithf "No arguments to an aggregate function %O" name
         | _ -> ()
         FEAggFunc (name, expr, filter)
     else
@@ -847,7 +849,8 @@ FieldExprMisc:
     | Value                                     { FEValue $1 }
     | Name ParenedExprList OVER WindowClause    { makeWindowFunc $1 $2 $4 }
     | Name LEFT_PAREN ID FROM FieldExpr RIGHT_PAREN { makeExtractFunc $1 $3 $5 }
-    | Name ParenedExprList                      { makeFunc $1 $2 }
+    | Name LEFT_PAREN ExprList ORDER BY WindowOrderByList RIGHT_PAREN OptAggFilter { makeAggFunc $1 (AEAll($3, List.toArray $6)) $8 }
+    | Name ParenedExprList OptAggFilter         { makeFunc $1 $2 $3 }
     | Name LEFT_PAREN AggFuncArgs RIGHT_PAREN OptAggFilter { makeAggFunc $1 $3 $5 }
     // Special case for supporting `lest` SQL function.
     | LEFT ParenedExprList                      { FEFunc (OzmaQLName "left", $2) }
@@ -877,9 +880,11 @@ WindowOrderByExpr:
     | FieldExpr SortOrder NullsOrder { ({ Expr = $1; Order = $2; Nulls = $3 } : WindowOrderColumn<EntityRef, LinkedFieldRef>) }
 
 AggFuncArgs:
-    | ALL ExprList       { AEAll $2 }
-    | DISTINCT FieldExpr { AEDistinct $2 }
-    | MULTIPLY           { AEStar }
+    | ALL ExprList                     { AEAll($2, [||]) }
+    | ALL ExprList ORDER BY WindowOrderByList { AEAll($2, List.toArray $5) }
+    | DISTINCT FieldExpr               { AEDistinct($2, [||]) }
+    | DISTINCT FieldExpr ORDER BY WindowOrderByList { AEDistinct($2, List.toArray $5) }
+    | MULTIPLY                         { AEStar }
 
 OptAggFilter:
     |                                      { None }

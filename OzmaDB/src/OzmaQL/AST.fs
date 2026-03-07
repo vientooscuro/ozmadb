@@ -932,18 +932,27 @@ and FieldExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
         member this.ToOzmaQLString() = this.ToOzmaQLString()
 
 and [<NoEquality; NoComparison>] AggExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
-    | AEAll of FieldExpr<'e, 'f>[]
-    | AEDistinct of FieldExpr<'e, 'f>
+    | AEAll of FieldExpr<'e, 'f>[] * WindowOrderColumn<'e, 'f>[]
+    | AEDistinct of FieldExpr<'e, 'f> * WindowOrderColumn<'e, 'f>[]
     | AEStar
 
     override this.ToString() = this.ToOzmaQLString()
 
     member this.ToOzmaQLString() =
+        let orderByString (orderBy: WindowOrderColumn<'e, 'f>[]) =
+            if Array.isEmpty orderBy then
+                ""
+            else
+                sprintf "ORDER BY %s" (orderBy |> Seq.map toOzmaQLString |> String.concat ", ")
+
         match this with
-        | AEAll exprs ->
+        | AEAll(exprs, orderBy) ->
             assert (not <| Array.isEmpty exprs)
-            exprs |> Array.map toOzmaQLString |> String.concat ", "
-        | AEDistinct expr -> sprintf "DISTINCT %s" (expr.ToOzmaQLString())
+            String.concatWithWhitespaces
+                [ exprs |> Array.map toOzmaQLString |> String.concat ", "
+                  orderByString orderBy ]
+        | AEDistinct(expr, orderBy) ->
+            String.concatWithWhitespaces [ sprintf "DISTINCT %s" (expr.ToOzmaQLString()); orderByString orderBy ]
         | AEStar -> "*"
 
     interface IOzmaQLString with
@@ -1528,8 +1537,28 @@ let onlyFieldExprMapper (fieldFunc: 'f1 -> 'f2) =
 
 let mapAggExpr (func: FieldExpr<'e1, 'f1> -> FieldExpr<'e2, 'f2>) : AggExpr<'e1, 'f1> -> AggExpr<'e2, 'f2> =
     function
-    | AEAll exprs -> AEAll(Array.map func exprs)
-    | AEDistinct expr -> AEDistinct(func expr)
+    | AEAll(exprs, orderBy) ->
+        let newOrderBy =
+            Array.map
+                (fun (col: WindowOrderColumn<'e1, 'f1>) ->
+                    { Expr = func col.Expr
+                      Order = col.Order
+                      Nulls = col.Nulls }
+                    : WindowOrderColumn<'e2, 'f2>)
+                orderBy
+
+        AEAll(Array.map func exprs, newOrderBy)
+    | AEDistinct(expr, orderBy) ->
+        let newOrderBy =
+            Array.map
+                (fun (col: WindowOrderColumn<'e1, 'f1>) ->
+                    { Expr = func col.Expr
+                      Order = col.Order
+                      Nulls = col.Nulls }
+                    : WindowOrderColumn<'e2, 'f2>)
+                orderBy
+
+        AEDistinct(func expr, newOrderBy)
     | AEStar -> AEStar
 
 let mapWindowClause
@@ -1649,8 +1678,42 @@ let mapTaskAggExpr
     (func: FieldExpr<'e1, 'f1> -> Task<FieldExpr<'e2, 'f2>>)
     : AggExpr<'e1, 'f1> -> Task<AggExpr<'e2, 'f2>> =
     function
-    | AEAll exprs -> Task.map AEAll (Array.mapTask func exprs)
-    | AEDistinct expr -> Task.map AEDistinct (func expr)
+    | AEAll(exprs, orderBy) ->
+        task {
+            let! newExprs = Array.mapTask func exprs
+
+            let mapOrderCol (col: WindowOrderColumn<'e1, 'f1>) =
+                task {
+                    let! expr = func col.Expr
+
+                    return
+                        ({ Expr = expr
+                           Order = col.Order
+                           Nulls = col.Nulls }
+                        : WindowOrderColumn<'e2, 'f2>)
+                }
+
+            let! newOrderBy = Array.mapTask mapOrderCol orderBy
+            return AEAll(newExprs, newOrderBy)
+        }
+    | AEDistinct(expr, orderBy) ->
+        task {
+            let! newExpr = func expr
+
+            let mapOrderCol (col: WindowOrderColumn<'e1, 'f1>) =
+                task {
+                    let! orderExpr = func col.Expr
+
+                    return
+                        ({ Expr = orderExpr
+                           Order = col.Order
+                           Nulls = col.Nulls }
+                        : WindowOrderColumn<'e2, 'f2>)
+                }
+
+            let! newOrderBy = Array.mapTask mapOrderCol orderBy
+            return AEDistinct(newExpr, newOrderBy)
+        }
     | AEStar -> Task.result AEStar
 
 let mapTaskWindowClause
@@ -1814,8 +1877,12 @@ let iterFieldType (func: 'e1 -> unit) : FieldType<'e1> -> unit =
 
 let iterAggExpr (func: FieldExpr<'e, 'f> -> unit) : AggExpr<'e, 'f> -> unit =
     function
-    | AEAll exprs -> Array.iter func exprs
-    | AEDistinct expr -> func expr
+    | AEAll(exprs, orderBy) ->
+        Array.iter func exprs
+        Array.iter (fun (col: WindowOrderColumn<'e, 'f>) -> func col.Expr) orderBy
+    | AEDistinct(expr, orderBy) ->
+        func expr
+        Array.iter (fun (col: WindowOrderColumn<'e, 'f>) -> func col.Expr) orderBy
     | AEStar -> ()
 
 let iterWindowClause (func: FieldExpr<'e, 'f> -> unit) : WindowClause<'e, 'f> -> unit =

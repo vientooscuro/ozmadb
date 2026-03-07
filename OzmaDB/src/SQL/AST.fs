@@ -688,18 +688,25 @@ type ValueExpr =
         member this.ToSQLString() = this.ToSQLString()
 
 and [<NoEquality; NoComparison>] AggExpr =
-    | AEAll of ValueExpr[]
-    | AEDistinct of ValueExpr
+    | AEAll of ValueExpr[] * WindowOrderColumn[]
+    | AEDistinct of ValueExpr * WindowOrderColumn[]
     | AEStar
 
     override this.ToString() = this.ToSQLString()
 
     member this.ToSQLString() =
+        let orderByString (orderBy: WindowOrderColumn[]) =
+            if Array.isEmpty orderBy then
+                ""
+            else
+                sprintf "ORDER BY %s" (orderBy |> Seq.map toSQLString |> String.concat ", ")
+
         match this with
-        | AEAll exprs ->
+        | AEAll(exprs, orderBy) ->
             assert (not <| Array.isEmpty exprs)
-            exprs |> Seq.map toSQLString |> String.concat ", "
-        | AEDistinct expr -> sprintf "DISTINCT %s" (expr.ToSQLString())
+            String.concatWithWhitespaces [ exprs |> Seq.map toSQLString |> String.concat ", "; orderByString orderBy ]
+        | AEDistinct(expr, orderBy) ->
+            String.concatWithWhitespaces [ sprintf "DISTINCT %s" (expr.ToSQLString()); orderByString orderBy ]
         | AEStar -> "*"
 
     interface ISQLString with
@@ -1367,8 +1374,28 @@ let rec genericMapValueExpr (mapper: ValueExprGenericMapper) : ValueExpr -> Valu
 
 and mapAggExpr (func: ValueExpr -> ValueExpr) : AggExpr -> AggExpr =
     function
-    | AEAll exprs -> AEAll(Array.map func exprs)
-    | AEDistinct expr -> AEDistinct(func expr)
+    | AEAll(exprs, orderBy) ->
+        let newOrderBy =
+            Array.map
+                (fun (col: WindowOrderColumn) ->
+                    { Expr = func col.Expr
+                      Order = col.Order
+                      Nulls = col.Nulls }
+                    : WindowOrderColumn)
+                orderBy
+
+        AEAll(Array.map func exprs, newOrderBy)
+    | AEDistinct(expr, orderBy) ->
+        let newOrderBy =
+            Array.map
+                (fun (col: WindowOrderColumn) ->
+                    { Expr = func col.Expr
+                      Order = col.Order
+                      Nulls = col.Nulls }
+                    : WindowOrderColumn)
+                orderBy
+
+        AEDistinct(func expr, newOrderBy)
     | AEStar -> AEStar
 
 and mapWindowClause (func: ValueExpr -> ValueExpr) : WindowClause -> WindowClause =
@@ -1489,8 +1516,12 @@ let rec iterValueExpr (mapper: ValueExprIter) : ValueExpr -> unit =
 
 and iterAggExpr (func: ValueExpr -> unit) : AggExpr -> unit =
     function
-    | AEAll exprs -> Array.iter func exprs
-    | AEDistinct expr -> func expr
+    | AEAll(exprs, orderBy) ->
+        Array.iter func exprs
+        Array.iter (fun (col: WindowOrderColumn) -> func col.Expr) orderBy
+    | AEDistinct(expr, orderBy) ->
+        func expr
+        Array.iter (fun (col: WindowOrderColumn) -> func col.Expr) orderBy
     | AEStar -> ()
 
 and iterWindowClause (func: ValueExpr -> unit) : WindowClause -> unit =
