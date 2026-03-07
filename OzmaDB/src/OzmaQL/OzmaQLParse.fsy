@@ -644,7 +644,6 @@ FromTableExpr:
 
 TableExpr:
     | SelectWithParens                                      { TESelect $1 }
-    | Name ParenedExprList                                  { TETableFunc ($1, $2) }
     | DOMAIN OF LinkedFieldRef DomainExprInfo               { TEDomain ($3, $4) }
     | DOMAIN OF FIELD Name DOT Name DomainExprInfo          { TEFieldDomain ({ Schema = None; Name = $4 }, $6, $7) }
     | DOMAIN OF FIELD Name DOT Name DOT Name DomainExprInfo { TEFieldDomain ({ Schema = Some $4; Name = $6 }, $8, $9) }
@@ -654,8 +653,8 @@ DomainExprInfo:
     | FromEntityRole { { AsRoot = $1 } }
 
 QuerySource:
-    | FromTableExpr                      { FTableExpr $1 }
     | FromEntity                         { FEntity $1 }
+    | FromTableExpr                      { FTableExpr $1 }
     | JoinedTable                        { $1 }
 
 JoinedTable:
