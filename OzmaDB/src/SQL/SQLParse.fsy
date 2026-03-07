@@ -47,6 +47,7 @@ let private narrowInt (i : int64) =
 %token MINUS
 %token MULTIPLY
 %token DIVIDE
+%token MOD
 %token MATCH_REGEX
 %token MATCH_REGEX_CI
 %token NOT_MATCH_REGEX
@@ -89,7 +90,7 @@ let private narrowInt (i : int64) =
 %nonassoc IN LIKE ILIKE SIMILAR
 %left LIKE_OP NOT_LIKE_OP ILIKE_OP NOT_ILIKE_OP MATCH_REGEX MATCH_REGEX_CI NOT_MATCH_REGEX NOT_MATCH_REGEX_CI CONCAT ARROW DOUBLE_ARROW
 %left PLUS MINUS
-%left MULTIPLY DIVIDE
+%left MULTIPLY DIVIDE MOD
 %left DOUBLE_COLON
 %left DOT
 
@@ -177,6 +178,7 @@ ValueExprMisc:
     | ValueExprMisc MINUS ValueExprMisc              { VEBinaryOp ($1, BOMinus, $3) }
     | ValueExprMisc MULTIPLY ValueExprMisc           { VEBinaryOp ($1, BOMultiply, $3) }
     | ValueExprMisc DIVIDE ValueExprMisc             { VEBinaryOp ($1, BODivide, $3) }
+    | ValueExprMisc MOD ValueExprMisc                { VEBinaryOp ($1, BOMod, $3) }
 
     // Now the same, but for ANY/ALL. I hate this.
     | ValueExprMisc LIKE_OP AnyAllOp                  { $3 BOLike $1 }
@@ -194,6 +196,7 @@ ValueExprMisc:
     | ValueExprMisc MINUS AnyAllOp                    { $3 BOMinus $1 }
     | ValueExprMisc MULTIPLY AnyAllOp                 { $3 BOMultiply $1 }
     | ValueExprMisc DIVIDE AnyAllOp                   { $3 BODivide $1 }
+    | ValueExprMisc MOD AnyAllOp                      { $3 BOMod $1 }
 
     | ValueExprMisc IN ParenedNonEmptyExprList        { VEIn ($1, $3) }
     | ValueExprMisc NOT IN ParenedNonEmptyExprList    { VENotIn ($1, $4) }

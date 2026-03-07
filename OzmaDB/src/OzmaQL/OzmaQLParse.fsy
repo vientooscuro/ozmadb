@@ -206,6 +206,7 @@ let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSe
 %token MINUS
 %token MULTIPLY
 %token DIVIDE
+%token MOD
 %token AMPERSAND
 %token MATCH_REGEX
 %token MATCH_REGEX_CI
@@ -320,7 +321,7 @@ let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSe
 %nonassoc IN LIKE ILIKE SIMILAR
 %left LIKE_OP NOT_LIKE_OP ILIKE_OP NOT_ILIKE_OP MATCH_REGEX MATCH_REGEX_CI NOT_MATCH_REGEX NOT_MATCH_REGEX_CI CONCAT ARROW DOUBLE_ARROW
 %left PLUS MINUS
-%left MULTIPLY DIVIDE
+%left MULTIPLY DIVIDE MOD
 %left DOUBLE_COLON
 %left DOT
 
@@ -807,6 +808,7 @@ FieldExprMisc:
     | FieldExprMisc MINUS FieldExprMisc              { FEBinaryOp ($1, BOMinus, $3) }
     | FieldExprMisc MULTIPLY FieldExprMisc           { FEBinaryOp ($1, BOMultiply, $3) }
     | FieldExprMisc DIVIDE FieldExprMisc             { FEBinaryOp ($1, BODivide, $3) }
+    | FieldExprMisc MOD FieldExprMisc                { FEBinaryOp ($1, BOMod, $3) }
 
     // Now the same, but for ANY/ALL. I hate this.
     | FieldExprMisc LIKE_OP AnyAllOp            { $3 BOLike $1 }
@@ -824,6 +826,7 @@ FieldExprMisc:
     | FieldExprMisc MINUS AnyAllOp              { $3 BOMinus $1 }
     | FieldExprMisc MULTIPLY AnyAllOp           { $3 BOMultiply $1 }
     | FieldExprMisc DIVIDE AnyAllOp             { $3 BODivide $1 }
+    | FieldExprMisc MOD AnyAllOp                { $3 BOMod $1 }
 
     | FieldExprMisc IN FieldInSource            { inExpr FEIn FEInQuery $1 $3 }
     | FieldExprMisc NOT IN FieldInSource        { inExpr FENotIn FENotInQuery $1 $4 }

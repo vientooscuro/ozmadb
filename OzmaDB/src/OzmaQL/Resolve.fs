@@ -134,6 +134,7 @@ let compileBinaryOp =
     | BOMinus -> SQL.BOMinus
     | BOMultiply -> SQL.BOMultiply
     | BODivide -> SQL.BODivide
+    | BOMod -> SQL.BOMod
     | BOJsonArrow -> SQL.BOJsonArrow
     | BOJsonTextArrow -> SQL.BOJsonTextArrow
 

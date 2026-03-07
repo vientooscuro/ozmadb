@@ -297,6 +297,11 @@ let private divideOverloads =
       ((STInterval, STDecimal), STInterval) ]
     |> binScalarsToSignatures
 
+let private modOverloads =
+    [ ((STInt, STInt), STInt)
+      ((STDecimal, STDecimal), STDecimal) ]
+    |> binScalarsToSignatures
+
 let private jsonArrowOverloads =
     [ ((STJson, STString), STJson); ((STJson, STInt), STJson) ]
     |> binScalarsToSignatures
@@ -326,6 +331,7 @@ let binaryOperatorSignature =
     | BOMinus -> minusOverloads
     | BOMultiply -> multiplyOverloads
     | BODivide -> divideOverloads
+    | BOMod -> modOverloads
     | BOJsonArrow -> jsonArrowOverloads
     | BOJsonTextArrow -> jsonTextArrowOverloads
 

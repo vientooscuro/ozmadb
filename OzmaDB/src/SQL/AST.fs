@@ -438,6 +438,7 @@ type BinaryOperator =
     | BOMinus
     | BOMultiply
     | BODivide
+    | BOMod
     | BOJsonArrow
     | BOJsonTextArrow
 
@@ -464,6 +465,7 @@ type BinaryOperator =
         | BOMinus -> "-"
         | BOMultiply -> "*"
         | BODivide -> "/"
+        | BOMod -> "%"
         | BOJsonArrow -> "->"
         | BOJsonTextArrow -> "->>"
 
