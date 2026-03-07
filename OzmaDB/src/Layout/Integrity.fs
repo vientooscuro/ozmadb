@@ -1355,7 +1355,8 @@ let private compileReferenceOfTypeCheck
 
         let singleSelect =
             { SQL.emptySingleSelectExpr with
-                Columns = [| SQL.SCExpr(None, SQL.VEAggFunc(SQL.SQLName "bool_and", SQL.AEAll([| checkExpr |], [||]), None)) |]
+                Columns =
+                    [| SQL.SCExpr(None, SQL.VEAggFunc(SQL.SQLName "bool_and", SQL.AEAll([| checkExpr |], [||]), None)) |]
                 From = Some join }
 
         Some <| SQL.selectExpr (SQL.SSelect singleSelect)

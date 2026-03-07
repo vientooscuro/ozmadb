@@ -948,6 +948,7 @@ and [<NoEquality; NoComparison>] AggExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :
         match this with
         | AEAll(exprs, orderBy) ->
             assert (not <| Array.isEmpty exprs)
+
             String.concatWithWhitespaces
                 [ exprs |> Array.map toOzmaQLString |> String.concat ", "
                   orderByString orderBy ]
