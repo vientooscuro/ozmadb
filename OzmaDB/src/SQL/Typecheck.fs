@@ -298,8 +298,7 @@ let private divideOverloads =
     |> binScalarsToSignatures
 
 let private modOverloads =
-    [ ((STInt, STInt), STInt)
-      ((STDecimal, STDecimal), STDecimal) ]
+    [ ((STInt, STInt), STInt); ((STDecimal, STDecimal), STDecimal) ]
     |> binScalarsToSignatures
 
 let private jsonArrowOverloads =

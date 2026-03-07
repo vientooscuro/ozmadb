@@ -1985,11 +1985,7 @@ type private QueryCompiler
 
                 SQL.VEWindowFunc(sqlName, compArgs, compWindow)
             | FEAggFunc(name, args, filter) ->
-                SQL.VEAggFunc(
-                    Map.find name allowedAggregateFunctions,
-                    compileAggExpr args,
-                    Option.map traverse filter
-                )
+                SQL.VEAggFunc(Map.find name allowedAggregateFunctions, compileAggExpr args, Option.map traverse filter)
             | FESubquery query -> SQL.VESubquery(compileSubSelectExpr query)
             | FEExists query -> SQL.VEExists(compileSubSelectExpr query)
             | FEInheritedFrom(c, subEntityRef) -> compileTypeCheck true c subEntityRef
@@ -2031,7 +2027,9 @@ type private QueryCompiler
 
             let valueRef = SQL.VEColumn { Table = None; Name = valueName }
             let innerResExpr = compileMappingValues valueRef mapping
-            let resExpr = SQL.VEAggFunc(SQL.SQLName "array_agg", SQL.AEAll [| innerResExpr |], None)
+
+            let resExpr =
+                SQL.VEAggFunc(SQL.SQLName "array_agg", SQL.AEAll [| innerResExpr |], None)
 
             let singleSelectExpr =
                 { SQL.emptySingleSelectExpr with
