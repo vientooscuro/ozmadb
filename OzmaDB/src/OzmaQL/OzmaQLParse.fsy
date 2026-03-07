@@ -143,6 +143,12 @@ let private makeFunc (name : OzmaQLName) (exprs : ParsedFieldExpr array) : Parse
     else
         FEFunc (name, exprs)
 
+let private makeExtractFunc (name : OzmaQLName) (part : string) (expr : ParsedFieldExpr) : ParsedFieldExpr =
+    if name = OzmaQLName "extract" then
+        FEFunc (OzmaQLName "date_part", [| FEValue (FString part); expr |])
+    else
+        failwithf "Unknown function syntax %O(... FROM ...)" name
+
 let private makeAggFunc (name : OzmaQLName) (expr : ParsedAggExpr) (filter : ParsedFieldExpr option) : ParsedFieldExpr =
     if Map.containsKey name allowedAggregateFunctions then
         match expr with
@@ -841,6 +847,7 @@ FieldExprMisc:
     | LinkedFieldRef                            { FERef $1 }
     | Value                                     { FEValue $1 }
     | Name ParenedExprList OVER WindowClause    { makeWindowFunc $1 $2 $4 }
+    | Name LEFT_PAREN ID FROM FieldExpr RIGHT_PAREN { makeExtractFunc $1 $3 $5 }
     | Name ParenedExprList                      { makeFunc $1 $2 }
     | Name LEFT_PAREN AggFuncArgs RIGHT_PAREN OptAggFilter { makeAggFunc $1 $3 $5 }
     // Special case for supporting `lest` SQL function.
