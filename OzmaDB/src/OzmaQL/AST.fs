@@ -1656,10 +1656,10 @@ let mapTaskWindowClause
                     let! expr = fieldFunc col.Expr
 
                     return
-                        { Expr = expr
-                          Order = col.Order
-                          Nulls = col.Nulls }
-                    : WindowOrderColumn<'e2, 'f2>
+                        ({ Expr = expr
+                           Order = col.Order
+                           Nulls = col.Nulls }
+                        : WindowOrderColumn<'e2, 'f2>)
                 }
 
             let! orderBy = Array.mapTask mapOrderCol wnd.OrderBy
