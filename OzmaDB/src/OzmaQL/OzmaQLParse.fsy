@@ -641,8 +641,8 @@ DomainExprInfo:
     | FromEntityRole { { AsRoot = $1 } }
 
 QuerySource:
-    | FromEntity                         { FEntity $1 }
     | FromTableExpr                      { FTableExpr $1 }
+    | FromEntity                         { FEntity $1 }
     | JoinedTable                        { $1 }
 
 JoinedTable:

@@ -2216,19 +2216,6 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                 | None -> None
                 | Some(_, ret) -> Some <| decompileFieldType ret
             | None -> None
-        | FEWindowFunc(name, args, _) ->
-            match Map.tryFind (SQL.SQLName <| string name) SQL.sqlKnownFunctions with
-            | Some overloads ->
-                let sqlArgs =
-                    args
-                    |> Array.map (fun arg ->
-                        tryInferResolvedFieldExprType arg
-                        |> Option.map compileFieldType)
-
-                match SQL.findFunctionOverloads overloads sqlArgs with
-                | None -> None
-                | Some(_, ret) -> Some <| decompileFieldType ret
-            | None -> None
         | _ -> None
 
     let applyAlias (alias: EntityAlias) (results: SubqueryFields) : SubqueryFields =
@@ -2245,6 +2232,54 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                 raisef QueryResolveException "Clashing names: %s" msg
 
             renameFields fieldNames results
+
+    let rewriteSingleResultSetFunctionSelect (query: ParsedSingleSelectExpr) : ParsedSingleSelectExpr =
+        let isSimpleSelectWithoutClauses =
+            not query.Distinct
+            && Option.isNone query.From
+            && Option.isNone query.Where
+            && Array.isEmpty query.GroupBy
+            && Array.isEmpty query.OrderLimit.OrderBy
+            && Option.isNone query.OrderLimit.Limit
+            && Option.isNone query.OrderLimit.Offset
+            && Map.isEmpty query.Attributes
+
+        if not isSimpleSelectWithoutClauses then
+            query
+        else
+            match query.Results with
+            | [| QRExpr({ Alias = Some outName
+                          Attributes = attrs
+                          Result = FEFunc(funcName, args) } as col) |] when
+                Map.containsKey funcName allowedTableFunctions && Map.isEmpty attrs
+                ->
+                let sourceAlias = OzmaQLName "__setfn"
+                let sourceEntity = { Schema = None; Name = sourceAlias }: EntityRef
+
+                let sourceField =
+                    { Entity = Some sourceEntity
+                      Name = outName }
+                    : FieldRef
+
+                let sourceRef: LinkedFieldRef =
+                    { Ref = VRColumn sourceField
+                      Path = [||]
+                      AsRoot = false }
+
+                let rewrittenCol = { col with Result = FERef sourceRef }
+
+                let rewrittenFrom: ParsedFromExpr =
+                    FTableExpr
+                        { Alias =
+                            { Name = sourceAlias
+                              Fields = Some [| outName |] }
+                          Lateral = false
+                          Expression = TETableFunc(funcName, args) }
+
+                { query with
+                    Results = [| QRExpr rewrittenCol |]
+                    From = Some rewrittenFrom }
+            | _ -> query
 
     let fromEntityMapping (ctx: Context) (isInner: bool) (entity: ParsedFromEntity) : FromEntityMappingInfo =
         let fromEntityId = nextFromEntityId ()
@@ -3109,6 +3144,8 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
         (flags: SelectFlags)
         (query: ParsedSingleSelectExpr)
         : SubqueryInfo * ResolvedSingleSelectExpr =
+        let query = rewriteSingleResultSetFunctionSelect query
+
         if flags.NoAttributes && not (Map.isEmpty query.Attributes) then
             raisef QueryResolveException "Attributes are not allowed in query expressions"
 
