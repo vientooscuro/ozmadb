@@ -157,8 +157,9 @@ let private normalizeLocalExpr: ValueExpr -> ValueExpr =
         | VEInQuery(e, query) -> failwithf "Invalid subquery in local expression: %O" query
         | VENotInQuery(e, query) -> failwithf "Invalid subquery in local expression: %O" query
         | VEFunc(name, args) -> VEFunc(name, Array.map traverse args)
+        | VEWindowFunc(name, args, _) -> failwithf "Invalid window function in local expression: %O" name
         | VESpecialFunc(name, args) -> VESpecialFunc(name, Array.map traverse args)
-        | VEAggFunc(name, args) -> failwithf "Invalid aggregate function in local expression: %O" name
+        | VEAggFunc(name, args, _) -> failwithf "Invalid aggregate function in local expression: %O" name
         | VECase(es, els) ->
             VECase(Array.map (fun (cond, e) -> (traverse cond, traverse e)) es, Option.map traverse els)
         | VEArray vals -> VEArray(Array.map traverse vals)

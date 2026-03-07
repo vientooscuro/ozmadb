@@ -80,6 +80,7 @@ rule tokenizeSQL = parse
     | "-"    { Parse.MINUS }
     | "*"    { Parse.MULTIPLY }
     | "/"    { Parse.DIVIDE }
+    | "%"    { Parse.MOD }
 
     // Keywords
     | t r u e         { Parse.BOOL true }

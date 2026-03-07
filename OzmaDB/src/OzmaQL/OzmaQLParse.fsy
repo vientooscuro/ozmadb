@@ -139,18 +139,27 @@ let private coalesceJsonArray (exprs : ParsedFieldExpr list) : ParsedFieldExpr =
 
 let private makeFunc (name : OzmaQLName) (exprs : ParsedFieldExpr array) : ParsedFieldExpr =
     if Map.containsKey name allowedAggregateFunctions && Array.length exprs > 0 then
-        FEAggFunc (name, AEAll exprs)
+        FEAggFunc (name, AEAll exprs, None)
     else
         FEFunc (name, exprs)
 
-let private makeAggFunc (name : OzmaQLName) (expr : ParsedAggExpr) : ParsedFieldExpr =
+let private makeExtractFunc (name : OzmaQLName) (part : string) (expr : ParsedFieldExpr) : ParsedFieldExpr =
+    if name = OzmaQLName "extract" then
+        FEFunc (OzmaQLName "date_part", [| FEValue (FString part); expr |])
+    else
+        failwithf "Unknown function syntax %O(... FROM ...)" name
+
+let private makeAggFunc (name : OzmaQLName) (expr : ParsedAggExpr) (filter : ParsedFieldExpr option) : ParsedFieldExpr =
     if Map.containsKey name allowedAggregateFunctions then
         match expr with
         | AEAll exprs when Array.length exprs = 0 -> failwithf "No arguments to an aggregate function %O" name
         | _ -> ()
-        FEAggFunc (name, expr)
+        FEAggFunc (name, expr, filter)
     else
         failwithf "Unknown aggregate function %O" name
+
+let private makeWindowFunc (name : OzmaQLName) (exprs : ParsedFieldExpr array) (window : WindowClause<EntityRef, LinkedFieldRef>) : ParsedFieldExpr =
+    FEWindowFunc (name, exprs, window)
 
 let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSelectTreeExpr -> ParsedSelectTreeExpr = function
     | SSelect sel -> SSelect { sel with OrderLimit = orderLimit }
@@ -203,6 +212,7 @@ let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSe
 %token MINUS
 %token MULTIPLY
 %token DIVIDE
+%token MOD
 %token AMPERSAND
 %token MATCH_REGEX
 %token MATCH_REGEX_CI
@@ -224,6 +234,8 @@ let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSe
 %token ON
 %token ORDER
 %token BY
+%token OVER
+%token PARTITION
 %token AS
 %token ASC
 %token DESC
@@ -288,6 +300,7 @@ let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSe
 %token FIELD
 %token DOMAIN
 %token TYPE
+%token FILTER
 
 // Types
 %token INT_TYPE
@@ -315,7 +328,7 @@ let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSe
 %nonassoc IN LIKE ILIKE SIMILAR
 %left LIKE_OP NOT_LIKE_OP ILIKE_OP NOT_ILIKE_OP MATCH_REGEX MATCH_REGEX_CI NOT_MATCH_REGEX NOT_MATCH_REGEX_CI CONCAT ARROW DOUBLE_ARROW
 %left PLUS MINUS
-%left MULTIPLY DIVIDE
+%left MULTIPLY DIVIDE MOD
 %left DOUBLE_COLON
 %left DOT
 
@@ -802,6 +815,7 @@ FieldExprMisc:
     | FieldExprMisc MINUS FieldExprMisc              { FEBinaryOp ($1, BOMinus, $3) }
     | FieldExprMisc MULTIPLY FieldExprMisc           { FEBinaryOp ($1, BOMultiply, $3) }
     | FieldExprMisc DIVIDE FieldExprMisc             { FEBinaryOp ($1, BODivide, $3) }
+    | FieldExprMisc MOD FieldExprMisc                { FEBinaryOp ($1, BOMod, $3) }
 
     // Now the same, but for ANY/ALL. I hate this.
     | FieldExprMisc LIKE_OP AnyAllOp            { $3 BOLike $1 }
@@ -819,6 +833,7 @@ FieldExprMisc:
     | FieldExprMisc MINUS AnyAllOp              { $3 BOMinus $1 }
     | FieldExprMisc MULTIPLY AnyAllOp           { $3 BOMultiply $1 }
     | FieldExprMisc DIVIDE AnyAllOp             { $3 BODivide $1 }
+    | FieldExprMisc MOD AnyAllOp                { $3 BOMod $1 }
 
     | FieldExprMisc IN FieldInSource            { inExpr FEIn FEInQuery $1 $3 }
     | FieldExprMisc NOT IN FieldInSource        { inExpr FENotIn FENotInQuery $1 $4 }
@@ -831,8 +846,10 @@ FieldExprMisc:
     | LinkedFieldRef GET_FIELD_ATTR Name        { FEFieldAttr ($1, $3) }
     | LinkedFieldRef                            { FERef $1 }
     | Value                                     { FEValue $1 }
+    | Name ParenedExprList OVER WindowClause    { makeWindowFunc $1 $2 $4 }
+    | Name LEFT_PAREN ID FROM FieldExpr RIGHT_PAREN { makeExtractFunc $1 $3 $5 }
     | Name ParenedExprList                      { makeFunc $1 $2 }
-    | Name LEFT_PAREN AggFuncArgs RIGHT_PAREN   { makeAggFunc $1 $3 }
+    | Name LEFT_PAREN AggFuncArgs RIGHT_PAREN OptAggFilter { makeAggFunc $1 $3 $5 }
     // Special case for supporting `lest` SQL function.
     | LEFT ParenedExprList                      { FEFunc (OzmaQLName "left", $2) }
     | JsonObject                                { $1 }
@@ -841,10 +858,33 @@ FieldExprMisc:
     | EXISTS SelectWithParens                   { FEExists $2 }
     | LEFT_PAREN FieldExpr RIGHT_PAREN          { $2 }
 
+WindowClause:
+    | LEFT_PAREN WindowPartitionBy WindowOrderBy RIGHT_PAREN { { PartitionBy = $2; OrderBy = $3 } }
+
+WindowPartitionBy:
+    |                             { [||] }
+    | PARTITION BY NonEmptyExprList { $3 }
+
+WindowOrderBy:
+    |                        { [||] }
+    | ORDER BY WindowOrderByList { List.toArray $3 }
+
+WindowOrderByList:
+    | WindowOrderByExpr                         { [$1] }
+    | WindowOrderByExpr COMMA                   { [$1] }
+    | WindowOrderByExpr COMMA WindowOrderByList { $1 :: $3 }
+
+WindowOrderByExpr:
+    | FieldExpr SortOrder NullsOrder { ({ Expr = $1; Order = $2; Nulls = $3 } : WindowOrderColumn<EntityRef, LinkedFieldRef>) }
+
 AggFuncArgs:
     | ALL ExprList       { AEAll $2 }
     | DISTINCT FieldExpr { AEDistinct $2 }
     | MULTIPLY           { AEStar }
+
+OptAggFilter:
+    |                                      { None }
+    | FILTER LEFT_PAREN WHERE FieldExpr RIGHT_PAREN { Some $4 }
 
 CaseExpr:
     | CASE CaseWhenList CaseElse END { FECase (List.toArray $2, $3) }

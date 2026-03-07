@@ -552,6 +552,7 @@ type BinaryOperator =
     | BOMinus
     | BOMultiply
     | BODivide
+    | BOMod
     | BOJsonArrow
     | BOJsonTextArrow
 
@@ -578,6 +579,7 @@ type BinaryOperator =
         | BOMinus -> "-"
         | BOMultiply -> "*"
         | BODivide -> "/"
+        | BOMod -> "%"
         | BOJsonArrow -> "->"
         | BOJsonTextArrow -> "->>"
 
@@ -771,6 +773,45 @@ and [<NoEquality; NoComparison>] Attribute<'e, 'f> when 'e :> IOzmaQLName and 'f
     interface IOzmaQLString with
         member this.ToOzmaQLString() = this.ToOzmaQLString()
 
+and [<NoEquality; NoComparison>] WindowOrderColumn<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
+    { Expr: FieldExpr<'e, 'f>
+      Order: SortOrder option
+      Nulls: NullsOrder option }
+
+    override this.ToString() = this.ToOzmaQLString()
+
+    member this.ToOzmaQLString() =
+        let orderStr = optionToOzmaQLString this.Order
+        let nullsStr = optionToOzmaQLString this.Nulls
+        String.concatWithWhitespaces [ this.Expr.ToOzmaQLString(); orderStr; nullsStr ]
+
+    interface IOzmaQLString with
+        member this.ToOzmaQLString() = this.ToOzmaQLString()
+
+and [<NoEquality; NoComparison>] WindowClause<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
+    { PartitionBy: FieldExpr<'e, 'f>[]
+      OrderBy: WindowOrderColumn<'e, 'f>[] }
+
+    override this.ToString() = this.ToOzmaQLString()
+
+    member this.ToOzmaQLString() =
+        let partitionByStr =
+            if Array.isEmpty this.PartitionBy then
+                ""
+            else
+                sprintf "PARTITION BY %s" (this.PartitionBy |> Seq.map toOzmaQLString |> String.concat ", ")
+
+        let orderByStr =
+            if Array.isEmpty this.OrderBy then
+                ""
+            else
+                sprintf "ORDER BY %s" (this.OrderBy |> Seq.map toOzmaQLString |> String.concat ", ")
+
+        String.concatWithWhitespaces [ partitionByStr; orderByStr ]
+
+    interface IOzmaQLString with
+        member this.ToOzmaQLString() = this.ToOzmaQLString()
+
 and FieldExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
     | FEValue of FieldValue
     | FERef of 'f
@@ -798,7 +839,8 @@ and FieldExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
     | FEJsonArray of FieldExpr<'e, 'f>[]
     | FEJsonObject of Map<OzmaQLName, FieldExpr<'e, 'f>>
     | FEFunc of FunctionName * FieldExpr<'e, 'f>[]
-    | FEAggFunc of FunctionName * AggExpr<'e, 'f>
+    | FEWindowFunc of FunctionName * FieldExpr<'e, 'f>[] * WindowClause<'e, 'f>
+    | FEAggFunc of FunctionName * AggExpr<'e, 'f> * (FieldExpr<'e, 'f> option)
     | FESubquery of SelectExpr<'e, 'f>
     | FEExists of SelectExpr<'e, 'f>
     | FEInheritedFrom of 'f * SubEntityRef
@@ -868,7 +910,19 @@ and FieldExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
             |> sprintf "{%s}"
         | FEFunc(name, args) ->
             sprintf "%s(%s)" (name.ToOzmaQLString()) (args |> Seq.map toOzmaQLString |> String.concat ", ")
-        | FEAggFunc(name, args) -> sprintf "%s(%s)" (name.ToOzmaQLString()) (args.ToOzmaQLString())
+        | FEWindowFunc(name, args, window) ->
+            sprintf
+                "%s(%s) OVER (%s)"
+                (name.ToOzmaQLString())
+                (args |> Seq.map toOzmaQLString |> String.concat ", ")
+                (window.ToOzmaQLString())
+        | FEAggFunc(name, args, filter) ->
+            let filterStr =
+                match filter with
+                | Some expr -> sprintf "FILTER (WHERE %s)" (expr.ToOzmaQLString())
+                | None -> ""
+
+            String.concatWithWhitespaces [ sprintf "%s(%s)" (name.ToOzmaQLString()) (args.ToOzmaQLString()); filterStr ]
         | FESubquery q -> sprintf "(%s)" (q.ToOzmaQLString())
         | FEExists q -> sprintf "EXISTS (%s)" (q.ToOzmaQLString())
         | FEInheritedFrom(f, ref) -> sprintf "%s INHERITED FROM %s" (f.ToOzmaQLString()) (ref.Ref.ToOzmaQLString())
@@ -1478,6 +1532,20 @@ let mapAggExpr (func: FieldExpr<'e1, 'f1> -> FieldExpr<'e2, 'f2>) : AggExpr<'e1,
     | AEDistinct expr -> AEDistinct(func expr)
     | AEStar -> AEStar
 
+let mapWindowClause
+    (fieldFunc: FieldExpr<'e1, 'f1> -> FieldExpr<'e2, 'f2>)
+    : WindowClause<'e1, 'f1> -> WindowClause<'e2, 'f2> =
+    fun wnd ->
+        { PartitionBy = Array.map fieldFunc wnd.PartitionBy
+          OrderBy =
+            Array.map
+                (fun (col: WindowOrderColumn<'e1, 'f1>) ->
+                    { Expr = fieldFunc col.Expr
+                      Order = col.Order
+                      Nulls = col.Nulls }
+                    : WindowOrderColumn<'e2, 'f2>)
+                wnd.OrderBy }
+
 let mapScalarFieldType (func: 'e1 -> 'e2) : ScalarFieldType<'e1> -> ScalarFieldType<'e2> =
     function
     | SFTInt -> SFTInt
@@ -1537,7 +1605,10 @@ let rec mapFieldExpr (mapper: FieldExprMapper<'e1, 'f1, 'e2, 'f2>) : FieldExpr<'
         | FEJsonArray vals -> FEJsonArray(Array.map traverse vals)
         | FEJsonObject obj -> FEJsonObject(Map.map (fun name -> traverse) obj)
         | FEFunc(name, args) -> FEFunc(name, Array.map traverse args)
-        | FEAggFunc(name, args) -> FEAggFunc(name, mapAggExpr traverse (mapper.PreAggregate args))
+        | FEWindowFunc(name, args, window) ->
+            FEWindowFunc(name, Array.map traverse args, mapWindowClause traverse window)
+        | FEAggFunc(name, args, filter) ->
+            FEAggFunc(name, mapAggExpr traverse (mapper.PreAggregate args), Option.map traverse filter)
         | FESubquery query -> FESubquery(mapper.Query query)
         | FEExists query -> FEExists(mapper.Query query)
         | FEInheritedFrom(f, nam) ->
@@ -1581,6 +1652,31 @@ let mapTaskAggExpr
     | AEAll exprs -> Task.map AEAll (Array.mapTask func exprs)
     | AEDistinct expr -> Task.map AEDistinct (func expr)
     | AEStar -> Task.result AEStar
+
+let mapTaskWindowClause
+    (fieldFunc: FieldExpr<'e1, 'f1> -> Task<FieldExpr<'e2, 'f2>>)
+    : WindowClause<'e1, 'f1> -> Task<WindowClause<'e2, 'f2>> =
+    fun wnd ->
+        task {
+            let! partitionBy = Array.mapTask fieldFunc wnd.PartitionBy
+
+            let mapOrderCol (col: WindowOrderColumn<'e1, 'f1>) =
+                task {
+                    let! expr = fieldFunc col.Expr
+
+                    return
+                        ({ Expr = expr
+                           Order = col.Order
+                           Nulls = col.Nulls }
+                        : WindowOrderColumn<'e2, 'f2>)
+                }
+
+            let! orderBy = Array.mapTask mapOrderCol wnd.OrderBy
+
+            return
+                { PartitionBy = partitionBy
+                  OrderBy = orderBy }
+        }
 
 let mapTaskScalarFieldType (func: 'e1 -> Task<'e2>) : ScalarFieldType<'e1> -> Task<ScalarFieldType<'e2>> =
     function
@@ -1650,10 +1746,18 @@ let mapTaskFieldExpr
         | FEJsonArray vals -> Task.map FEJsonArray (Array.mapTask traverse vals)
         | FEJsonObject obj -> Task.map FEJsonObject (Map.mapTask (fun name -> traverse) obj)
         | FEFunc(name, args) -> Task.map (fun x -> FEFunc(name, x)) (Array.mapTask traverse args)
-        | FEAggFunc(name, args) ->
+        | FEWindowFunc(name, args, window) ->
+            task {
+                let! newArgs = Array.mapTask traverse args
+                let! newWindow = mapTaskWindowClause traverse window
+                return FEWindowFunc(name, newArgs, newWindow)
+            }
+        | FEAggFunc(name, args, filter) ->
             task {
                 let! args1 = mapper.PreAggregate args
-                return! Task.map (fun x -> FEAggFunc(name, x)) (mapTaskAggExpr traverse args1)
+                let! newArgs = mapTaskAggExpr traverse args1
+                let! newFilter = Option.mapTask traverse filter
+                return FEAggFunc(name, newArgs, newFilter)
             }
         | FESubquery query -> Task.map FESubquery (mapper.Query query)
         | FEExists query -> Task.map FEExists (mapper.Query query)
@@ -1713,6 +1817,11 @@ let iterAggExpr (func: FieldExpr<'e, 'f> -> unit) : AggExpr<'e, 'f> -> unit =
     | AEAll exprs -> Array.iter func exprs
     | AEDistinct expr -> func expr
     | AEStar -> ()
+
+let iterWindowClause (func: FieldExpr<'e, 'f> -> unit) : WindowClause<'e, 'f> -> unit =
+    fun wnd ->
+        Array.iter func wnd.PartitionBy
+        Array.iter (fun (col: WindowOrderColumn<'e, 'f>) -> func col.Expr) wnd.OrderBy
 
 let iterFieldExpr (mapper: FieldExprIter<'e, 'f>) : FieldExpr<'e, 'f> -> unit =
     let rec traverse =
@@ -1787,9 +1896,13 @@ let iterFieldExpr (mapper: FieldExprIter<'e, 'f>) : FieldExpr<'e, 'f> -> unit =
         | FEJsonArray vals -> Array.iter traverse vals
         | FEJsonObject obj -> Map.iter (fun name -> traverse) obj
         | FEFunc(name, args) -> Array.iter traverse args
-        | FEAggFunc(name, args) ->
+        | FEWindowFunc(name, args, window) ->
+            Array.iter traverse args
+            iterWindowClause traverse window
+        | FEAggFunc(name, args, filter) ->
             mapper.Aggregate args
             iterAggExpr traverse args
+            Option.iter traverse filter
         | FESubquery query -> mapper.Query query
         | FEExists query -> mapper.Query query
         | FEInheritedFrom(f, nam) ->

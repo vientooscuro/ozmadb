@@ -134,6 +134,7 @@ let compileBinaryOp =
     | BOMinus -> SQL.BOMinus
     | BOMultiply -> SQL.BOMultiply
     | BODivide -> SQL.BODivide
+    | BOMod -> SQL.BOMod
     | BOJsonArrow -> SQL.BOJsonArrow
     | BOJsonTextArrow -> SQL.BOJsonTextArrow
 
@@ -2216,6 +2217,17 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                 | None -> None
                 | Some(_, ret) -> Some <| decompileFieldType ret
             | None -> None
+        | FEWindowFunc(name, args, _) ->
+            match Map.tryFind (SQL.SQLName <| string name) SQL.sqlKnownFunctions with
+            | Some overloads ->
+                let sqlArgs =
+                    args
+                    |> Array.map (fun arg -> tryInferResolvedFieldExprType arg |> Option.map compileFieldType)
+
+                match SQL.findFunctionOverloads overloads sqlArgs with
+                | None -> None
+                | Some(_, ret) -> Some <| decompileFieldType ret
+            | None -> None
         | _ -> None
 
     let applyAlias (alias: EntityAlias) (results: SubqueryFields) : SubqueryFields =
@@ -2803,7 +2815,33 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
             | FEFunc(name, args) ->
                 let newArgs = Array.map (traverse outerTypeCtxs >> snd) args
                 (emptyCondTypeContexts, FEFunc(name, newArgs))
-            | FEAggFunc(name, args) ->
+            | FEWindowFunc(name, args, window) ->
+                exprInfo <-
+                    { exprInfo with
+                        Flags =
+                            { exprInfo.Flags with
+                                HasAggregates = true } }
+
+                let newArgs = Array.map (traverse outerTypeCtxs >> snd) args
+                let newPartitionBy = Array.map (traverse outerTypeCtxs >> snd) window.PartitionBy
+
+                let newOrderBy =
+                    Array.map
+                        (fun (ord: WindowOrderColumn<EntityRef, LinkedFieldRef>) ->
+                            { Expr = traverse outerTypeCtxs ord.Expr |> snd
+                              Order = ord.Order
+                              Nulls = ord.Nulls }
+                            : WindowOrderColumn<EntityRef, LinkedBoundFieldRef>)
+                        window.OrderBy
+
+                (emptyCondTypeContexts,
+                 FEWindowFunc(
+                     name,
+                     newArgs,
+                     { PartitionBy = newPartitionBy
+                       OrderBy = newOrderBy }
+                 ))
+            | FEAggFunc(name, args, filter) ->
                 exprInfo <-
                     { exprInfo with
                         Flags =
@@ -2811,7 +2849,8 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                                 HasAggregates = true } }
 
                 let newArgs = mapAggExpr (traverse outerTypeCtxs >> snd) args
-                (emptyCondTypeContexts, FEAggFunc(name, newArgs))
+                let newFilter = Option.map (traverse outerTypeCtxs >> snd) filter
+                (emptyCondTypeContexts, FEAggFunc(name, newArgs, newFilter))
             | FESubquery query ->
                 let newQuery = resolveQuery query
                 (emptyCondTypeContexts, FESubquery newQuery)
