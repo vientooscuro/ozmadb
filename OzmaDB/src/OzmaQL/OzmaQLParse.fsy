@@ -152,6 +152,9 @@ let private makeAggFunc (name : OzmaQLName) (expr : ParsedAggExpr) : ParsedField
     else
         failwithf "Unknown aggregate function %O" name
 
+let private makeWindowFunc (name : OzmaQLName) (exprs : ParsedFieldExpr array) (window : WindowClause<EntityRef, LinkedFieldRef>) : ParsedFieldExpr =
+    FEWindowFunc (name, exprs, window)
+
 let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSelectTreeExpr -> ParsedSelectTreeExpr = function
     | SSelect sel -> SSelect { sel with OrderLimit = orderLimit }
     | SValues _ -> failwith "RDER BY and LIMIT/OFFSET support for VALUES is not implemented"
@@ -224,6 +227,8 @@ let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSe
 %token ON
 %token ORDER
 %token BY
+%token OVER
+%token PARTITION
 %token AS
 %token ASC
 %token DESC
@@ -831,6 +836,7 @@ FieldExprMisc:
     | LinkedFieldRef GET_FIELD_ATTR Name        { FEFieldAttr ($1, $3) }
     | LinkedFieldRef                            { FERef $1 }
     | Value                                     { FEValue $1 }
+    | Name ParenedExprList OVER WindowClause    { makeWindowFunc $1 $2 $4 }
     | Name ParenedExprList                      { makeFunc $1 $2 }
     | Name LEFT_PAREN AggFuncArgs RIGHT_PAREN   { makeAggFunc $1 $3 }
     // Special case for supporting `lest` SQL function.
@@ -840,6 +846,25 @@ FieldExprMisc:
     | SelectWithParens                          { FESubquery $1 }
     | EXISTS SelectWithParens                   { FEExists $2 }
     | LEFT_PAREN FieldExpr RIGHT_PAREN          { $2 }
+
+WindowClause:
+    | LEFT_PAREN WindowPartitionBy WindowOrderBy RIGHT_PAREN { { PartitionBy = $2; OrderBy = $3 } }
+
+WindowPartitionBy:
+    |                             { [||] }
+    | PARTITION BY NonEmptyExprList { $3 }
+
+WindowOrderBy:
+    |                        { [||] }
+    | ORDER BY WindowOrderByList { List.toArray $3 }
+
+WindowOrderByList:
+    | WindowOrderByExpr                         { [$1] }
+    | WindowOrderByExpr COMMA                   { [$1] }
+    | WindowOrderByExpr COMMA WindowOrderByList { $1 :: $3 }
+
+WindowOrderByExpr:
+    | FieldExpr SortOrder NullsOrder { ({ Expr = $1; Order = $2; Nulls = $3 } : WindowOrderColumn<EntityRef, LinkedFieldRef>) }
 
 AggFuncArgs:
     | ALL ExprList       { AEAll $2 }

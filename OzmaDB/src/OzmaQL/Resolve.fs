@@ -2768,6 +2768,32 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
             | FEFunc(name, args) ->
                 let newArgs = Array.map (traverse outerTypeCtxs >> snd) args
                 (emptyCondTypeContexts, FEFunc(name, newArgs))
+            | FEWindowFunc(name, args, window) ->
+                exprInfo <-
+                    { exprInfo with
+                        Flags =
+                            { exprInfo.Flags with
+                                HasAggregates = true } }
+
+                let newArgs = Array.map (traverse outerTypeCtxs >> snd) args
+                let newPartitionBy = Array.map (traverse outerTypeCtxs >> snd) window.PartitionBy
+
+                let newOrderBy =
+                    Array.map
+                        (fun (ord: WindowOrderColumn<EntityRef, LinkedFieldRef>) ->
+                            { Expr = traverse outerTypeCtxs ord.Expr |> snd
+                              Order = ord.Order
+                              Nulls = ord.Nulls }
+                            : WindowOrderColumn<EntityRef, LinkedBoundFieldRef>)
+                        window.OrderBy
+
+                (emptyCondTypeContexts,
+                 FEWindowFunc(
+                     name,
+                     newArgs,
+                     { PartitionBy = newPartitionBy
+                       OrderBy = newOrderBy }
+                 ))
             | FEAggFunc(name, args) ->
                 exprInfo <-
                     { exprInfo with

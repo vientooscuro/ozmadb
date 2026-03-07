@@ -610,6 +610,7 @@ type ValueExpr =
     | VEIsNotNull of ValueExpr
     | VESpecialFunc of SpecialFunction * ValueExpr[]
     | VEFunc of FunctionName * ValueExpr[]
+    | VEWindowFunc of FunctionName * ValueExpr[] * WindowClause
     | VEAggFunc of FunctionName * AggExpr
     | VECast of ValueExpr * DBValueType
     | VECase of (ValueExpr * ValueExpr)[] * (ValueExpr option)
@@ -651,6 +652,12 @@ type ValueExpr =
             sprintf "%s(%s)" (name.ToSQLString()) (args |> Seq.map toSQLString |> String.concat ", ")
         | VEFunc(name, args) ->
             sprintf "%s(%s)" (name.ToSQLString()) (args |> Seq.map toSQLString |> String.concat ", ")
+        | VEWindowFunc(name, args, window) ->
+            sprintf
+                "%s(%s) OVER (%s)"
+                (name.ToSQLString())
+                (args |> Seq.map toSQLString |> String.concat ", ")
+                (window.ToSQLString())
         | VEAggFunc(name, args) -> sprintf "%s(%s)" (name.ToSQLString()) (args.ToSQLString())
         | VECast(e, typ) -> sprintf "(%s) :: %s" (e.ToSQLString()) (typ.ToSQLString())
         | VECase(es, els) ->
@@ -686,6 +693,45 @@ and [<NoEquality; NoComparison>] AggExpr =
             exprs |> Seq.map toSQLString |> String.concat ", "
         | AEDistinct expr -> sprintf "DISTINCT %s" (expr.ToSQLString())
         | AEStar -> "*"
+
+    interface ISQLString with
+        member this.ToSQLString() = this.ToSQLString()
+
+and [<NoEquality; NoComparison>] WindowOrderColumn =
+    { Expr: ValueExpr
+      Order: SortOrder option
+      Nulls: NullsOrder option }
+
+    override this.ToString() = this.ToSQLString()
+
+    member this.ToSQLString() =
+        let orderStr = optionToSQLString this.Order
+        let nullsStr = optionToSQLString this.Nulls
+        String.concatWithWhitespaces [ this.Expr.ToSQLString(); orderStr; nullsStr ]
+
+    interface ISQLString with
+        member this.ToSQLString() = this.ToSQLString()
+
+and [<NoEquality; NoComparison>] WindowClause =
+    { PartitionBy: ValueExpr[]
+      OrderBy: WindowOrderColumn[] }
+
+    override this.ToString() = this.ToSQLString()
+
+    member this.ToSQLString() =
+        let partitionByStr =
+            if Array.isEmpty this.PartitionBy then
+                ""
+            else
+                sprintf "PARTITION BY %s" (this.PartitionBy |> Seq.map toSQLString |> String.concat ", ")
+
+        let orderByStr =
+            if Array.isEmpty this.OrderBy then
+                ""
+            else
+                sprintf "ORDER BY %s" (this.OrderBy |> Seq.map toSQLString |> String.concat ", ")
+
+        String.concatWithWhitespaces [ partitionByStr; orderByStr ]
 
     interface ISQLString with
         member this.ToSQLString() = this.ToSQLString()
@@ -1297,6 +1343,8 @@ let rec genericMapValueExpr (mapper: ValueExprGenericMapper) : ValueExpr -> Valu
         | VEIsNotNull e -> VEIsNotNull <| traverse e
         | VESpecialFunc(name, args) -> VESpecialFunc(name, Array.map traverse args)
         | VEFunc(name, args) -> VEFunc(name, Array.map traverse args)
+        | VEWindowFunc(name, args, window) ->
+            VEWindowFunc(name, Array.map traverse args, mapWindowClause traverse window)
         | VEAggFunc(name, args) -> VEAggFunc(name, mapAggExpr traverse args)
         | VECast(e, typ) -> VECast(traverse e, typ)
         | VECase(es, els) ->
@@ -1314,6 +1362,18 @@ and mapAggExpr (func: ValueExpr -> ValueExpr) : AggExpr -> AggExpr =
     | AEAll exprs -> AEAll(Array.map func exprs)
     | AEDistinct expr -> AEDistinct(func expr)
     | AEStar -> AEStar
+
+and mapWindowClause (func: ValueExpr -> ValueExpr) : WindowClause -> WindowClause =
+    fun wnd ->
+        { PartitionBy = Array.map func wnd.PartitionBy
+          OrderBy =
+            Array.map
+                (fun (col: WindowOrderColumn) ->
+                    { Expr = func col.Expr
+                      Order = col.Order
+                      Nulls = col.Nulls }
+                    : WindowOrderColumn)
+                wnd.OrderBy }
 
 type ValueExprMapper =
     { Value: Value -> Value
@@ -1398,6 +1458,9 @@ let rec iterValueExpr (mapper: ValueExprIter) : ValueExpr -> unit =
         | VEIsNotNull e -> traverse e
         | VESpecialFunc(name, args) -> Array.iter traverse args
         | VEFunc(name, args) -> Array.iter traverse args
+        | VEWindowFunc(name, args, window) ->
+            Array.iter traverse args
+            iterWindowClause traverse window
         | VEAggFunc(name, args) -> iterAggExpr traverse args
         | VECast(e, typ) -> traverse e
         | VECase(es, els) ->
@@ -1419,6 +1482,11 @@ and iterAggExpr (func: ValueExpr -> unit) : AggExpr -> unit =
     | AEAll exprs -> Array.iter func exprs
     | AEDistinct expr -> func expr
     | AEStar -> ()
+
+and iterWindowClause (func: ValueExpr -> unit) : WindowClause -> unit =
+    fun wnd ->
+        Array.iter func wnd.PartitionBy
+        Array.iter (fun (col: WindowOrderColumn) -> func col.Expr) wnd.OrderBy
 
 let emptyOrderLimitClause =
     { OrderBy = [||]

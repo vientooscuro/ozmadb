@@ -1968,6 +1968,22 @@ type private QueryCompiler
                 | None -> raisef QueryCompileException "Unknown function: %O" name
                 | Some(FRFunction name) -> SQL.VEFunc(name, compArgs)
                 | Some(FRSpecial special) -> SQL.VESpecialFunc(special, compArgs)
+            | FEWindowFunc(name, args, window) ->
+                let compArgs = Array.map traverse args
+                let sqlName = Map.find name allowedWindowFunctions
+
+                let compWindow: SQL.WindowClause =
+                    { PartitionBy = Array.map traverse window.PartitionBy
+                      OrderBy =
+                        Array.map
+                            (fun (ord: WindowOrderColumn<EntityRef, LinkedBoundFieldRef>) ->
+                                { Expr = traverse ord.Expr
+                                  Order = Option.map compileOrder ord.Order
+                                  Nulls = Option.map compileNullsOrder ord.Nulls }
+                                : SQL.WindowOrderColumn)
+                            window.OrderBy }
+
+                SQL.VEWindowFunc(sqlName, compArgs, compWindow)
             | FEAggFunc(name, args) -> SQL.VEAggFunc(Map.find name allowedAggregateFunctions, compileAggExpr args)
             | FESubquery query -> SQL.VESubquery(compileSubSelectExpr query)
             | FEExists query -> SQL.VEExists(compileSubSelectExpr query)

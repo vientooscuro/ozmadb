@@ -58,18 +58,24 @@ let allowedFunctions: Map<FunctionName, FunctionRepr> =
           (OzmaQLName "least", FRSpecial SQL.SFLeast)
           (OzmaQLName "greatest", FRSpecial SQL.SFGreatest) ]
 
+let allowedWindowFunctions: Map<FunctionName, SQL.SQLName> =
+    Map.ofList [ (OzmaQLName "row_number", SQL.SQLName "row_number") ]
+
 // Whitelist of functions that can appear in FROM as table functions.
 // Currently we support single-column table functions.
 let allowedTableFunctions: Map<FunctionName, SQL.SQLName> =
     Map.ofList [ (OzmaQLName "generate_series", SQL.SQLName "generate_series") ]
 
 let private checkAllowedFunctions () =
-    allowedFunctions
-    |> Map.values
-    |> Seq.mapMaybe (function
-        | FRFunction name -> Some name
-        | _ -> None)
-    |> Seq.forall (fun name -> Map.containsKey name SQL.sqlKnownFunctions)
+    let normalAllowed =
+        allowedFunctions
+        |> Map.values
+        |> Seq.mapMaybe (function
+            | FRFunction name -> Some name
+            | _ -> None)
+
+    let allAllowed = Seq.append normalAllowed (Map.values allowedWindowFunctions)
+    allAllowed |> Seq.forall (fun name -> Map.containsKey name SQL.sqlKnownFunctions)
 
 assert checkAllowedFunctions ()
 
@@ -95,6 +101,25 @@ let private checkFunc (name: FunctionName) (args: (ResolvedFieldType option) seq
             ViewTypecheckException
             e
             "In function call %O(%s)"
+            name
+            (args |> Seq.map optionTypeToString |> String.concat ", ")
+
+let private checkWindowFunc (name: FunctionName) (args: (ResolvedFieldType option) seq) : ResolvedFieldType =
+    try
+        match Map.tryFind name allowedWindowFunctions with
+        | None -> raisef ViewTypecheckException "Unknown window function"
+        | Some sqlName ->
+            let overloads = Map.find sqlName SQL.sqlKnownFunctions
+            let sqlArgs = args |> Seq.map (Option.map compileFieldType) |> Seq.toArray
+
+            match SQL.findFunctionOverloads overloads sqlArgs with
+            | None -> raisef ViewTypecheckException "Couldn't deduce window function overload"
+            | Some(typs, ret) -> decompileFieldType ret
+    with e ->
+        raisefWithInner
+            ViewTypecheckException
+            e
+            "In window function call %O(%s)"
             name
             (args |> Seq.map optionTypeToString |> String.concat ", ")
 
@@ -261,6 +286,12 @@ type private Typechecker(layout: ILayoutBits) =
         | FEFunc(name, args) ->
             let argTypes = Seq.map typecheckFieldExpr args
             Some <| checkFunc name argTypes
+        | FEWindowFunc(name, args, window) ->
+            Array.iter (typecheckFieldExpr >> ignore) args
+            Array.iter (typecheckFieldExpr >> ignore) window.PartitionBy
+            Array.iter (fun (ord: WindowOrderColumn<EntityRef, LinkedBoundFieldRef>) -> typecheckFieldExpr ord.Expr |> ignore) window.OrderBy
+            let argTypes = Seq.map typecheckFieldExpr args
+            Some <| checkWindowFunc name argTypes
         | FEAggFunc(name, args) -> raisef ViewTypecheckException "Not implemented"
         | FESubquery query -> raisef ViewTypecheckException "Not implemented"
         | FEExists query -> Some(FTScalar SFTBool)

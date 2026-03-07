@@ -18,6 +18,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
+          global-json-file: ./global.json
           cache: true
           cache-dependency-path: |
             ./OzmaUtils/packages.lock.json
@@ -29,7 +30,7 @@ jobs:
           dotnet restore --locked-mode
       - name: Check formatting
         run: |
-          dotnet format --no-restore --verify-no-changes
+          dotnet format OzmaDBSchema/OzmaDBSchema.csproj --no-restore --verify-no-changes
           dotnet tool run fantomas --check .
       - name: Build Release
         run: |

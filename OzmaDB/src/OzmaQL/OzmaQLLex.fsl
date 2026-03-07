@@ -132,6 +132,8 @@ and tokenizeOzmaQL = parse
     | o n                     { Parse.ON }
     | o r d e r               { Parse.ORDER }
     | b y                     { Parse.BY }
+    | o v e r                 { Parse.OVER }
+    | p a r t i t i o n       { Parse.PARTITION }
     | a s                     { Parse.AS }
     | a s c                   { Parse.ASC }
     | d e s c                 { Parse.DESC }

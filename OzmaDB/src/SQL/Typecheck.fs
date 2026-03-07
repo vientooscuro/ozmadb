@@ -171,6 +171,8 @@ let private funScalarsToSignatures (signs: (SimpleType list * SimpleType) seq) :
     |> Seq.map (fun (args, ret) -> (List.map (Some >> HTScalar) args |> Array.ofList, HTScalar(Some ret)))
     |> Map.ofSeq
 
+let private funToSignatures (signs: (HoledValueType[] * HoledValueType) seq) : FunctionSignaturesMap = Map.ofSeq signs
+
 let private funScalarIdSignatures (signs: SimpleType seq) : FunctionSignaturesMap =
     signs |> Seq.map (fun typ -> ([ typ ], typ)) |> funScalarsToSignatures
 
@@ -221,7 +223,9 @@ let sqlKnownFunctions: Map<FunctionName, FunctionSignaturesMap> =
                  ([ STString; STInterval ], STInterval) ])
           (SQLName "isfinite",
            funScalarsToSignatures [ ([ STDate ], STBool); ([ STDateTime ], STBool); ([ STDate ], STBool) ])
-          (SQLName "generate_series", generateSeriesSignatures) ]
+          (SQLName "generate_series", generateSeriesSignatures)
+          // Window
+          (SQLName "row_number", funToSignatures [ ([||], HTScalar(Some STInt)) ]) ]
 
 let private binScalarsToSignatures (signs: ((SimpleType * SimpleType) * SimpleType) seq) : BinaryOperatorSignaturesMap =
     signs
