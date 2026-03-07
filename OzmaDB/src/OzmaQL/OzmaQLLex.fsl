@@ -198,6 +198,7 @@ and tokenizeOzmaQL = parse
     | d o m a i n             { Parse.DOMAIN }
     | f i e l d               { Parse.FIELD }
     | t y p e                 { Parse.TYPE }
+    | f i l t e r             { Parse.FILTER }
 
     // Types
     | i n t             { Parse.INT_TYPE }

@@ -840,7 +840,7 @@ and FieldExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
     | FEJsonObject of Map<OzmaQLName, FieldExpr<'e, 'f>>
     | FEFunc of FunctionName * FieldExpr<'e, 'f>[]
     | FEWindowFunc of FunctionName * FieldExpr<'e, 'f>[] * WindowClause<'e, 'f>
-    | FEAggFunc of FunctionName * AggExpr<'e, 'f>
+    | FEAggFunc of FunctionName * AggExpr<'e, 'f> * (FieldExpr<'e, 'f> option)
     | FESubquery of SelectExpr<'e, 'f>
     | FEExists of SelectExpr<'e, 'f>
     | FEInheritedFrom of 'f * SubEntityRef
@@ -916,7 +916,13 @@ and FieldExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
                 (name.ToOzmaQLString())
                 (args |> Seq.map toOzmaQLString |> String.concat ", ")
                 (window.ToOzmaQLString())
-        | FEAggFunc(name, args) -> sprintf "%s(%s)" (name.ToOzmaQLString()) (args.ToOzmaQLString())
+        | FEAggFunc(name, args, filter) ->
+            let filterStr =
+                match filter with
+                | Some expr -> sprintf "FILTER (WHERE %s)" (expr.ToOzmaQLString())
+                | None -> ""
+
+            String.concatWithWhitespaces [ sprintf "%s(%s)" (name.ToOzmaQLString()) (args.ToOzmaQLString()); filterStr ]
         | FESubquery q -> sprintf "(%s)" (q.ToOzmaQLString())
         | FEExists q -> sprintf "EXISTS (%s)" (q.ToOzmaQLString())
         | FEInheritedFrom(f, ref) -> sprintf "%s INHERITED FROM %s" (f.ToOzmaQLString()) (ref.Ref.ToOzmaQLString())
@@ -1601,7 +1607,8 @@ let rec mapFieldExpr (mapper: FieldExprMapper<'e1, 'f1, 'e2, 'f2>) : FieldExpr<'
         | FEFunc(name, args) -> FEFunc(name, Array.map traverse args)
         | FEWindowFunc(name, args, window) ->
             FEWindowFunc(name, Array.map traverse args, mapWindowClause traverse window)
-        | FEAggFunc(name, args) -> FEAggFunc(name, mapAggExpr traverse (mapper.PreAggregate args))
+        | FEAggFunc(name, args, filter) ->
+            FEAggFunc(name, mapAggExpr traverse (mapper.PreAggregate args), Option.map traverse filter)
         | FESubquery query -> FESubquery(mapper.Query query)
         | FEExists query -> FEExists(mapper.Query query)
         | FEInheritedFrom(f, nam) ->
@@ -1745,10 +1752,12 @@ let mapTaskFieldExpr
                 let! newWindow = mapTaskWindowClause traverse window
                 return FEWindowFunc(name, newArgs, newWindow)
             }
-        | FEAggFunc(name, args) ->
+        | FEAggFunc(name, args, filter) ->
             task {
                 let! args1 = mapper.PreAggregate args
-                return! Task.map (fun x -> FEAggFunc(name, x)) (mapTaskAggExpr traverse args1)
+                let! newArgs = mapTaskAggExpr traverse args1
+                let! newFilter = Option.mapTask traverse filter
+                return FEAggFunc(name, newArgs, newFilter)
             }
         | FESubquery query -> Task.map FESubquery (mapper.Query query)
         | FEExists query -> Task.map FEExists (mapper.Query query)
@@ -1890,9 +1899,10 @@ let iterFieldExpr (mapper: FieldExprIter<'e, 'f>) : FieldExpr<'e, 'f> -> unit =
         | FEWindowFunc(name, args, window) ->
             Array.iter traverse args
             iterWindowClause traverse window
-        | FEAggFunc(name, args) ->
+        | FEAggFunc(name, args, filter) ->
             mapper.Aggregate args
             iterAggExpr traverse args
+            Option.iter traverse filter
         | FESubquery query -> mapper.Query query
         | FEExists query -> mapper.Query query
         | FEInheritedFrom(f, nam) ->

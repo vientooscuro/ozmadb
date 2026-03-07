@@ -139,16 +139,16 @@ let private coalesceJsonArray (exprs : ParsedFieldExpr list) : ParsedFieldExpr =
 
 let private makeFunc (name : OzmaQLName) (exprs : ParsedFieldExpr array) : ParsedFieldExpr =
     if Map.containsKey name allowedAggregateFunctions && Array.length exprs > 0 then
-        FEAggFunc (name, AEAll exprs)
+        FEAggFunc (name, AEAll exprs, None)
     else
         FEFunc (name, exprs)
 
-let private makeAggFunc (name : OzmaQLName) (expr : ParsedAggExpr) : ParsedFieldExpr =
+let private makeAggFunc (name : OzmaQLName) (expr : ParsedAggExpr) (filter : ParsedFieldExpr option) : ParsedFieldExpr =
     if Map.containsKey name allowedAggregateFunctions then
         match expr with
         | AEAll exprs when Array.length exprs = 0 -> failwithf "No arguments to an aggregate function %O" name
         | _ -> ()
-        FEAggFunc (name, expr)
+        FEAggFunc (name, expr, filter)
     else
         failwithf "Unknown aggregate function %O" name
 
@@ -294,6 +294,7 @@ let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSe
 %token FIELD
 %token DOMAIN
 %token TYPE
+%token FILTER
 
 // Types
 %token INT_TYPE
@@ -841,7 +842,7 @@ FieldExprMisc:
     | Value                                     { FEValue $1 }
     | Name ParenedExprList OVER WindowClause    { makeWindowFunc $1 $2 $4 }
     | Name ParenedExprList                      { makeFunc $1 $2 }
-    | Name LEFT_PAREN AggFuncArgs RIGHT_PAREN   { makeAggFunc $1 $3 }
+    | Name LEFT_PAREN AggFuncArgs RIGHT_PAREN OptAggFilter { makeAggFunc $1 $3 $5 }
     // Special case for supporting `lest` SQL function.
     | LEFT ParenedExprList                      { FEFunc (OzmaQLName "left", $2) }
     | JsonObject                                { $1 }
@@ -873,6 +874,10 @@ AggFuncArgs:
     | ALL ExprList       { AEAll $2 }
     | DISTINCT FieldExpr { AEDistinct $2 }
     | MULTIPLY           { AEStar }
+
+OptAggFilter:
+    |                                      { None }
+    | FILTER LEFT_PAREN WHERE FieldExpr RIGHT_PAREN { Some $4 }
 
 CaseExpr:
     | CASE CaseWhenList CaseElse END { FECase (List.toArray $2, $3) }

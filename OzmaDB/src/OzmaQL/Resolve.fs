@@ -2793,7 +2793,7 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                      { PartitionBy = newPartitionBy
                        OrderBy = newOrderBy }
                  ))
-            | FEAggFunc(name, args) ->
+            | FEAggFunc(name, args, filter) ->
                 exprInfo <-
                     { exprInfo with
                         Flags =
@@ -2801,7 +2801,8 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                                 HasAggregates = true } }
 
                 let newArgs = mapAggExpr (traverse outerTypeCtxs >> snd) args
-                (emptyCondTypeContexts, FEAggFunc(name, newArgs))
+                let newFilter = Option.map (traverse outerTypeCtxs >> snd) filter
+                (emptyCondTypeContexts, FEAggFunc(name, newArgs, newFilter))
             | FESubquery query ->
                 let newQuery = resolveQuery query
                 (emptyCondTypeContexts, FESubquery newQuery)

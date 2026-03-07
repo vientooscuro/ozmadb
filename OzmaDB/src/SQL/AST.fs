@@ -613,7 +613,7 @@ type ValueExpr =
     | VESpecialFunc of SpecialFunction * ValueExpr[]
     | VEFunc of FunctionName * ValueExpr[]
     | VEWindowFunc of FunctionName * ValueExpr[] * WindowClause
-    | VEAggFunc of FunctionName * AggExpr
+    | VEAggFunc of FunctionName * AggExpr * (ValueExpr option)
     | VECast of ValueExpr * DBValueType
     | VECase of (ValueExpr * ValueExpr)[] * (ValueExpr option)
     | VEArray of ValueExpr[]
@@ -660,7 +660,13 @@ type ValueExpr =
                 (name.ToSQLString())
                 (args |> Seq.map toSQLString |> String.concat ", ")
                 (window.ToSQLString())
-        | VEAggFunc(name, args) -> sprintf "%s(%s)" (name.ToSQLString()) (args.ToSQLString())
+        | VEAggFunc(name, args, filter) ->
+            let filterStr =
+                match filter with
+                | Some expr -> sprintf "FILTER (WHERE %s)" (expr.ToSQLString())
+                | None -> ""
+
+            String.concatWithWhitespaces [ sprintf "%s(%s)" (name.ToSQLString()) (args.ToSQLString()); filterStr ]
         | VECast(e, typ) -> sprintf "(%s) :: %s" (e.ToSQLString()) (typ.ToSQLString())
         | VECase(es, els) ->
             let esStr =
@@ -1347,7 +1353,7 @@ let rec genericMapValueExpr (mapper: ValueExprGenericMapper) : ValueExpr -> Valu
         | VEFunc(name, args) -> VEFunc(name, Array.map traverse args)
         | VEWindowFunc(name, args, window) ->
             VEWindowFunc(name, Array.map traverse args, mapWindowClause traverse window)
-        | VEAggFunc(name, args) -> VEAggFunc(name, mapAggExpr traverse args)
+        | VEAggFunc(name, args, filter) -> VEAggFunc(name, mapAggExpr traverse args, Option.map traverse filter)
         | VECast(e, typ) -> VECast(traverse e, typ)
         | VECase(es, els) ->
             let es' = Array.map (fun (cond, e) -> (traverse cond, traverse e)) es
@@ -1463,7 +1469,9 @@ let rec iterValueExpr (mapper: ValueExprIter) : ValueExpr -> unit =
         | VEWindowFunc(name, args, window) ->
             Array.iter traverse args
             iterWindowClause traverse window
-        | VEAggFunc(name, args) -> iterAggExpr traverse args
+        | VEAggFunc(name, args, filter) ->
+            iterAggExpr traverse args
+            Option.iter traverse filter
         | VECast(e, typ) -> traverse e
         | VECase(es, els) ->
             Array.iter
