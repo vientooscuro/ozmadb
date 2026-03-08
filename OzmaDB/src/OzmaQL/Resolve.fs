@@ -2863,6 +2863,16 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                 let (typeCtxs, newE) = traverse outerTypeCtxs e
                 let newVals = Array.map (traverse outerTypeCtxs >> snd) vals
                 (emptyCondTypeContexts, FENotIn(newE, newVals))
+            | FEBetween(e, lo, hi) ->
+                let (_, newE) = traverse outerTypeCtxs e
+                let (_, newLo) = traverse outerTypeCtxs lo
+                let (_, newHi) = traverse outerTypeCtxs hi
+                (emptyCondTypeContexts, FEBetween(newE, newLo, newHi))
+            | FENotBetween(e, lo, hi) ->
+                let (_, newE) = traverse outerTypeCtxs e
+                let (_, newLo) = traverse outerTypeCtxs lo
+                let (_, newHi) = traverse outerTypeCtxs hi
+                (emptyCondTypeContexts, FENotBetween(newE, newLo, newHi))
             | FEInQuery(e, query) ->
                 let (typeCtxs, newE) = traverse outerTypeCtxs e
                 let newQuery = resolveQuery query

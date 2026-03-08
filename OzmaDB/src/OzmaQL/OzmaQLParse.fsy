@@ -247,6 +247,7 @@ let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSe
 %token ILIKE
 %token SIMILAR
 %token IN
+%token BETWEEN
 %token IS
 %token TO
 %token NOT
@@ -839,6 +840,8 @@ FieldExprMisc:
     | FieldExprMisc LEFT_BRACKET FieldExpr RIGHT_BRACKET { FEArrayIndex($1, $3) }
     | FieldExprMisc IN FieldInSource            { inExpr FEIn FEInQuery $1 $3 }
     | FieldExprMisc NOT IN FieldInSource        { inExpr FENotIn FENotInQuery $1 $4 }
+    | FieldExprMisc BETWEEN FieldExprMisc AND FieldExprMisc { FEBetween($1, $3, $5) }
+    | FieldExprMisc NOT BETWEEN FieldExprMisc AND FieldExprMisc { FENotBetween($1, $4, $6) }
     | FieldExprMisc DOUBLE_COLON ExprFieldType  { FECast ($1, $3) }
     | CaseExpr                                  { $1 }
     | MatchExpr                                 { $1 }

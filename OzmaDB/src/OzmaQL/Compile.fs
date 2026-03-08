@@ -1915,6 +1915,8 @@ type private QueryCompiler
             | FENotSimilarTo(e, pat) -> SQL.VENotSimilarTo(traverse e, traverse pat)
             | FEIn(a, arr) -> SQL.VEIn(traverse a, Array.map traverse arr)
             | FENotIn(a, arr) -> SQL.VENotIn(traverse a, Array.map traverse arr)
+            | FEBetween(e, lo, hi) -> SQL.VEBetween(traverse e, traverse lo, traverse hi)
+            | FENotBetween(e, lo, hi) -> SQL.VENotBetween(traverse e, traverse lo, traverse hi)
             | FEInQuery(a, query) -> SQL.VEInQuery(traverse a, compileSubSelectExpr query)
             | FENotInQuery(a, query) -> SQL.VENotInQuery(traverse a, compileSubSelectExpr query)
             | FEAny(e, op, arr) -> SQL.VEAny(traverse e, compileBinaryOp op, traverse arr)

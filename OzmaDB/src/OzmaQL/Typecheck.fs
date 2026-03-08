@@ -294,6 +294,20 @@ type private Typechecker(layout: ILayoutBits) =
         | FENotDistinct(a, b) -> Some <| typecheckEqLogical a b
         | FEIn(e, vals) -> Some <| typecheckInValues e vals
         | FENotIn(e, vals) -> Some <| typecheckInValues e vals
+        | FEBetween(e, lo, hi) ->
+            let te = typecheckFieldExpr e
+            let tlo = typecheckFieldExpr lo
+            let thi = typecheckFieldExpr hi
+            ignore <| checkBinaryOp BOLessEq tlo te
+            ignore <| checkBinaryOp BOLessEq te thi
+            Some scalarBool
+        | FENotBetween(e, lo, hi) ->
+            let te = typecheckFieldExpr e
+            let tlo = typecheckFieldExpr lo
+            let thi = typecheckFieldExpr hi
+            ignore <| checkBinaryOp BOLessEq tlo te
+            ignore <| checkBinaryOp BOLessEq te thi
+            Some scalarBool
         | FEInQuery(e, query) -> raisef ViewTypecheckException "Not implemented"
         | FENotInQuery(e, query) -> raisef ViewTypecheckException "Not implemented"
         | FECast(e, typ) ->

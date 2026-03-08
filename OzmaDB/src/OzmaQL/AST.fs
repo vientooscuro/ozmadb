@@ -827,6 +827,8 @@ and FieldExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
     | FENotSimilarTo of FieldExpr<'e, 'f> * FieldExpr<'e, 'f>
     | FEIn of FieldExpr<'e, 'f> * FieldExpr<'e, 'f>[]
     | FENotIn of FieldExpr<'e, 'f> * FieldExpr<'e, 'f>[]
+    | FEBetween of FieldExpr<'e, 'f> * FieldExpr<'e, 'f> * FieldExpr<'e, 'f>
+    | FENotBetween of FieldExpr<'e, 'f> * FieldExpr<'e, 'f> * FieldExpr<'e, 'f>
     | FEInQuery of FieldExpr<'e, 'f> * SelectExpr<'e, 'f>
     | FENotInQuery of FieldExpr<'e, 'f> * SelectExpr<'e, 'f>
     | FEAny of FieldExpr<'e, 'f> * BinaryOperator * FieldExpr<'e, 'f>
@@ -871,6 +873,8 @@ and FieldExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
             sprintf "(%s) NOT IN (%s)" (e.ToOzmaQLString()) (vals |> Seq.map toOzmaQLString |> String.concat ", ")
         | FEInQuery(e, query) -> sprintf "(%s) IN (%s)" (e.ToOzmaQLString()) (query.ToOzmaQLString())
         | FENotInQuery(e, query) -> sprintf "(%s) NOT IN (%s)" (e.ToOzmaQLString()) (query.ToOzmaQLString())
+        | FEBetween(e, lo, hi) -> sprintf "(%s) BETWEEN (%s) AND (%s)" (e.ToOzmaQLString()) (lo.ToOzmaQLString()) (hi.ToOzmaQLString())
+        | FENotBetween(e, lo, hi) -> sprintf "(%s) NOT BETWEEN (%s) AND (%s)" (e.ToOzmaQLString()) (lo.ToOzmaQLString()) (hi.ToOzmaQLString())
         | FEAny(e, op, arr) ->
             sprintf "(%s) %s ANY (%s)" (e.ToOzmaQLString()) (op.ToOzmaQLString()) (arr.ToOzmaQLString())
         | FEAll(e, op, arr) ->
@@ -1625,6 +1629,8 @@ let rec mapFieldExpr (mapper: FieldExprMapper<'e1, 'f1, 'e2, 'f2>) : FieldExpr<'
         | FENotIn(e, vals) -> FENotIn(traverse e, Array.map traverse vals)
         | FEInQuery(e, query) -> FEInQuery(traverse e, mapper.Query query)
         | FENotInQuery(e, query) -> FENotInQuery(traverse e, mapper.Query query)
+        | FEBetween(e, lo, hi) -> FEBetween(traverse e, traverse lo, traverse hi)
+        | FENotBetween(e, lo, hi) -> FENotBetween(traverse e, traverse lo, traverse hi)
         | FEAny(e, op, arr) -> FEAny(traverse e, op, traverse arr)
         | FEAll(e, op, arr) -> FEAll(traverse e, op, traverse arr)
         | FEArrayIndex(arr, idx) -> FEArrayIndex(traverse arr, traverse idx)
@@ -1786,6 +1792,8 @@ let mapTaskFieldExpr
         | FENotIn(e, vals) -> Task.map2 (curry FENotIn) (traverse e) (Array.mapTask traverse vals)
         | FEInQuery(e, query) -> Task.map2 (curry FEInQuery) (traverse e) (mapper.Query query)
         | FENotInQuery(e, query) -> Task.map2 (curry FENotInQuery) (traverse e) (mapper.Query query)
+        | FEBetween(e, lo, hi) -> Task.map3 (fun e lo hi -> FEBetween(e, lo, hi)) (traverse e) (traverse lo) (traverse hi)
+        | FENotBetween(e, lo, hi) -> Task.map3 (fun e lo hi -> FENotBetween(e, lo, hi)) (traverse e) (traverse lo) (traverse hi)
         | FEAny(e, op, arr) -> Task.map2 (fun e arr -> FEAny(e, op, arr)) (traverse e) (traverse arr)
         | FEAll(e, op, arr) -> Task.map2 (fun e arr -> FEAll(e, op, arr)) (traverse e) (traverse arr)
         | FEArrayIndex(arr, idx) -> Task.map2 (curry FEArrayIndex) (traverse arr) (traverse idx)
@@ -1936,6 +1944,14 @@ let iterFieldExpr (mapper: FieldExprIter<'e, 'f>) : FieldExpr<'e, 'f> -> unit =
         | FENotInQuery(e, query) ->
             traverse e
             mapper.Query query
+        | FEBetween(e, lo, hi) ->
+            traverse e
+            traverse lo
+            traverse hi
+        | FENotBetween(e, lo, hi) ->
+            traverse e
+            traverse lo
+            traverse hi
         | FEAny(e, op, arr) ->
             traverse e
             traverse arr

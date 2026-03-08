@@ -155,6 +155,8 @@ let private normalizeLocalExpr: ValueExpr -> ValueExpr =
         | VEAny(e, op, arr) -> VEAny(traverse e, op, traverse arr)
         | VEAll(e, op, arr) -> VEAll(traverse e, op, traverse arr)
         | VEArrayIndex(arr, idx) -> VEArrayIndex(traverse arr, traverse idx)
+        | VEBetween(e, lo, hi) -> VEBetween(traverse e, traverse lo, traverse hi)
+        | VENotBetween(e, lo, hi) -> VENotBetween(traverse e, traverse lo, traverse hi)
         | VEInQuery(e, query) -> failwithf "Invalid subquery in local expression: %O" query
         | VENotInQuery(e, query) -> failwithf "Invalid subquery in local expression: %O" query
         | VEFunc(name, args) -> VEFunc(name, Array.map traverse args)

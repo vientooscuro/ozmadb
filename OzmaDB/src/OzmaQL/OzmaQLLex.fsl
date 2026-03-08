@@ -144,6 +144,7 @@ and tokenizeOzmaQL = parse
     | i l i k e               { Parse.ILIKE }
     | s i m i l a r           { Parse.SIMILAR }
     | i n                     { Parse.IN }
+    | b e t w e e n           { Parse.BETWEEN }
     | i s                     { Parse.IS }
     | t o                     { Parse.TO }
     | n o t                   { Parse.NOT }

@@ -609,6 +609,8 @@ type ValueExpr =
     | VENotSimilarTo of ValueExpr * ValueExpr
     | VEIn of ValueExpr * ValueExpr[]
     | VENotIn of ValueExpr * ValueExpr[]
+    | VEBetween of ValueExpr * ValueExpr * ValueExpr
+    | VENotBetween of ValueExpr * ValueExpr * ValueExpr
     | VEInQuery of ValueExpr * SelectExpr
     | VENotInQuery of ValueExpr * SelectExpr
     | VEIsNull of ValueExpr
@@ -652,6 +654,8 @@ type ValueExpr =
             sprintf "(%s) NOT IN (%s)" (e.ToSQLString()) (vals |> Seq.map toSQLString |> String.concat ", ")
         | VEInQuery(e, query) -> sprintf "(%s) IN (%s)" (e.ToSQLString()) (query.ToSQLString())
         | VENotInQuery(e, query) -> sprintf "(%s) NOT IN (%s)" (e.ToSQLString()) (query.ToSQLString())
+        | VEBetween(e, lo, hi) -> sprintf "(%s) BETWEEN (%s) AND (%s)" (e.ToSQLString()) (lo.ToSQLString()) (hi.ToSQLString())
+        | VENotBetween(e, lo, hi) -> sprintf "(%s) NOT BETWEEN (%s) AND (%s)" (e.ToSQLString()) (lo.ToSQLString()) (hi.ToSQLString())
         | VEIsNull a -> sprintf "(%s) IS NULL" (a.ToSQLString())
         | VEIsNotNull a -> sprintf "(%s) IS NOT NULL" (a.ToSQLString())
         | VESpecialFunc(name, args) ->
@@ -1359,6 +1363,8 @@ let rec genericMapValueExpr (mapper: ValueExprGenericMapper) : ValueExpr -> Valu
         | VENotIn(e, vals) -> VENotIn(traverse e, Array.map traverse vals)
         | VEInQuery(e, query) -> VEInQuery(traverse e, mapper.Query query)
         | VENotInQuery(e, query) -> VENotInQuery(traverse e, mapper.Query query)
+        | VEBetween(e, lo, hi) -> VEBetween(traverse e, traverse lo, traverse hi)
+        | VENotBetween(e, lo, hi) -> VENotBetween(traverse e, traverse lo, traverse hi)
         | VEIsNull e -> VEIsNull <| traverse e
         | VEIsNotNull e -> VEIsNotNull <| traverse e
         | VESpecialFunc(name, args) -> VESpecialFunc(name, Array.map traverse args)
@@ -1497,6 +1503,14 @@ let rec iterValueExpr (mapper: ValueExprIter) : ValueExpr -> unit =
         | VENotInQuery(e, query) ->
             traverse e
             mapper.Query query
+        | VEBetween(e, lo, hi) ->
+            traverse e
+            traverse lo
+            traverse hi
+        | VENotBetween(e, lo, hi) ->
+            traverse e
+            traverse lo
+            traverse hi
         | VEIsNull e -> traverse e
         | VEIsNotNull e -> traverse e
         | VESpecialFunc(name, args) -> Array.iter traverse args
