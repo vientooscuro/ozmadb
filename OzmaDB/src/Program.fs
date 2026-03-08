@@ -1,5 +1,6 @@
 open System
 open System.IO
+open System.Linq
 open System.Threading
 open System.Threading.Tasks
 open System.Collections.Generic
@@ -78,6 +79,78 @@ type private DatabaseInstances
     let readOnlyConnectionString = deenlistConnectionString readOnlyConnectionString
     let logger = loggerFactory.CreateLogger<DatabaseInstances>()
 
+    let makeInstanceObject (instance: OzmaDBSchema.Instances.Instance) : IInstance =
+        let parsedRead = parseLimits instance.ReadRateLimitsPerUser
+        let parsedWrite = parseLimits instance.WriteRateLimitsPerUser
+
+        { new IInstance with
+            member this.Name = instance.Name
+
+            member this.Region = Option.ofObj instance.Region
+            member this.Host = instance.Host
+            member this.Port = instance.Port
+            member this.Username = instance.Username
+            member this.Password = instance.Password
+            member this.Database = instance.Database
+
+            member this.Owner = instance.Owner
+            member this.DisableSecurity = instance.DisableSecurity
+            member this.AnyoneCanRead = instance.AnyoneCanRead
+            member this.Published = instance.Published
+            member this.ShadowAdmins = instance.ShadowAdmins
+
+            member this.MaxSize = Option.ofNullable instance.MaxSize
+            member this.MaxUsers = Option.ofNullable instance.MaxUsers
+            member this.MaxRequestTime = Option.ofNullable instance.MaxRequestTime
+            member this.ReadRateLimitsPerUser = parsedRead
+            member this.WriteRateLimitsPerUser = parsedWrite
+
+            member this.MaxJSHeapSize = Option.ofNullable instance.MaxJSHeapSize
+            member this.MaxJSStackSize = Option.ofNullable instance.MaxJSStackSize
+
+            member this.AccessedAt = Option.ofNullable instance.AccessedAt
+
+            member this.UpdateAccessedAtAndDispose(newTime: Instant) =
+                let updateJob () : Task =
+                    task {
+                        try
+                            use instances =
+                                let builder = DbContextOptionsBuilder<InstancesContext>()
+                                setupDbContextLogging loggerFactory builder
+
+                                ignore
+                                <| builder.UseNpgsql(
+                                    connectionString,
+                                    fun opts -> ignore <| opts.UseNodaTime()
+                                )
+
+                                new InstancesContext(builder.Options)
+
+                            let! _ =
+                                instances.Instances
+                                    // This doesn't work: https://github.com/dotnet/efcore/issues/14013
+                                    // .Where(fun inst -> inst.Id = instance.Id && (not inst.AccessedAt.HasValue || inst.AccessedAt.Value < newTime))
+                                    .FromSql(
+                                        $"""SELECT * FROM "instances" WHERE "id" = {instance.Id} AND ("accessed_at" IS NULL OR "accessed_at" < {newTime})"""
+                                    )
+                                    .ExecuteUpdateAsync(
+                                        (fun inst ->
+                                            inst.SetProperty(
+                                                (fun inst -> inst.AccessedAt),
+                                                (fun inst -> Nullable(newTime))
+                                            )),
+                                        lifetime.ApplicationStopping
+                                    )
+
+                            ()
+                        with e ->
+                            logger.LogError(e, "Failed to update AccessedAt")
+                    }
+
+                ignore <| Threading.Tasks.Task.Run(updateJob)
+
+            member this.Dispose() = () }
+
     new
         (
             loggerFactory: ILoggerFactory,
@@ -116,83 +189,30 @@ type private DatabaseInstances
 
                     match result with
                     | null -> return None
-                    | instance ->
-                        let parsedRead = parseLimits instance.ReadRateLimitsPerUser
-                        let parsedWrite = parseLimits instance.WriteRateLimitsPerUser
-
-                        let obj =
-                            { new IInstance with
-                                member this.Name = instance.Name
-
-                                member this.Region = Option.ofObj instance.Region
-                                member this.Host = instance.Host
-                                member this.Port = instance.Port
-                                member this.Username = instance.Username
-                                member this.Password = instance.Password
-                                member this.Database = instance.Database
-
-                                member this.Owner = instance.Owner
-                                member this.DisableSecurity = instance.DisableSecurity
-                                member this.AnyoneCanRead = instance.AnyoneCanRead
-                                member this.Published = instance.Published
-                                member this.ShadowAdmins = instance.ShadowAdmins
-
-                                member this.MaxSize = Option.ofNullable instance.MaxSize
-                                member this.MaxUsers = Option.ofNullable instance.MaxUsers
-                                member this.MaxRequestTime = Option.ofNullable instance.MaxRequestTime
-                                member this.ReadRateLimitsPerUser = parsedRead
-                                member this.WriteRateLimitsPerUser = parsedWrite
-
-                                member this.MaxJSHeapSize = Option.ofNullable instance.MaxJSHeapSize
-                                member this.MaxJSStackSize = Option.ofNullable instance.MaxJSStackSize
-
-                                member this.AccessedAt = Option.ofNullable instance.AccessedAt
-
-                                member this.UpdateAccessedAtAndDispose(newTime: Instant) =
-                                    let updateJob () : Task =
-                                        task {
-                                            try
-                                                use instances =
-                                                    let builder = DbContextOptionsBuilder<InstancesContext>()
-                                                    setupDbContextLogging loggerFactory builder
-
-                                                    ignore
-                                                    <| builder.UseNpgsql(
-                                                        connectionString,
-                                                        fun opts -> ignore <| opts.UseNodaTime()
-                                                    )
-
-                                                    new InstancesContext(builder.Options)
-
-                                                let! _ =
-                                                    instances.Instances
-                                                        // This doesn't work: https://github.com/dotnet/efcore/issues/14013
-                                                        // .Where(fun inst -> inst.Id = instance.Id && (not inst.AccessedAt.HasValue || inst.AccessedAt.Value < newTime))
-                                                        .FromSql(
-                                                            $"""SELECT * FROM "instances" WHERE "id" = {instance.Id} AND ("accessed_at" IS NULL OR "accessed_at" < {newTime})"""
-                                                        )
-                                                        .ExecuteUpdateAsync(
-                                                            (fun inst ->
-                                                                inst.SetProperty(
-                                                                    (fun inst -> inst.AccessedAt),
-                                                                    (fun inst -> Nullable(newTime))
-                                                                )),
-                                                            lifetime.ApplicationStopping
-                                                        )
-
-                                                ()
-                                            with e ->
-                                                logger.LogError(e, "Failed to update AccessedAt")
-                                        }
-
-                                    ignore <| Threading.Tasks.Task.Run(updateJob)
-
-                                member this.Dispose() = () }
-
-                        return Some obj
+                    | instance -> return Some <| makeInstanceObject instance
                 with e ->
                     do! readOnlyInstances.DisposeAsync()
                     return reraise' e
+            }
+
+        member this.GetAllInstances(cancellationToken: CancellationToken) =
+            task {
+                use readOnlyInstances =
+                    let builder = DbContextOptionsBuilder<InstancesContext>()
+                    setupDbContextLogging loggerFactory builder
+
+                    ignore
+                    <| builder.UseNpgsql(readOnlyConnectionString, (fun opts -> ignore <| opts.UseNodaTime()))
+
+                    new InstancesContext(builder.Options)
+
+                let! results =
+                    readOnlyInstances.Instances
+                        .AsNoTracking()
+                        .Where(fun x -> x.Enabled)
+                        .ToListAsync(cancellationToken)
+
+                return results |> Seq.map makeInstanceObject
             }
 
         member this.SetExtraConnectionOptions(builder: NpgsqlConnectionStringBuilder) =
@@ -248,6 +268,19 @@ type private StaticInstance
                     Log.Information("No instance {host} found", host)
                     Task.result None
                 | Some instance -> instance |> getInstance |> Some |> Task.result
+
+        member this.GetAllInstances(cancellationToken: CancellationToken) =
+            let known =
+                instances
+                |> Map.values
+                |> Seq.map getInstance
+
+            let all =
+                match defaultInstance with
+                | None -> known
+                | Some inst -> Seq.append known (Seq.singleton <| getInstance inst)
+
+            Task.result <| Seq.distinctBy (fun inst -> inst.Name) all
 
         member this.SetExtraConnectionOptions(builder: NpgsqlConnectionStringBuilder) =
             builder.CommandTimeout <- 0
@@ -431,7 +464,8 @@ let private setupTimeTriggersWorker (webAppBuilder: WebApplicationBuilder) =
     <| services.AddHostedService(fun sp ->
         let loggerFactory = sp.GetRequiredService<ILoggerFactory>()
         let instancesCache = sp.GetRequiredService<InstancesCacheStore>()
-        new TimeTriggersWorker(loggerFactory, instancesCache))
+        let instancesSource = sp.GetRequiredService<IInstancesSource>()
+        new TimeTriggersWorker(loggerFactory, instancesCache, instancesSource))
 
 let private setupInstancesSource (webAppBuilder: WebApplicationBuilder) =
     let ozmadbSection = webAppBuilder.Configuration.GetSection("OzmaDB")

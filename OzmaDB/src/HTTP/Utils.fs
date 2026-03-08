@@ -315,6 +315,7 @@ type IInstance =
 
 type IInstancesSource =
     abstract member GetInstance: string -> CancellationToken -> Task<IInstance option>
+    abstract member GetAllInstances: CancellationToken -> Task<IInstance seq>
     abstract member SetExtraConnectionOptions: NpgsqlConnectionStringBuilder -> unit
     abstract member Region: string option
 

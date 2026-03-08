@@ -5,6 +5,7 @@ open System.Threading
 open System.Threading.Tasks
 open Microsoft.Extensions.Hosting
 open Microsoft.Extensions.Logging
+open Npgsql
 
 open OzmaDB.OzmaQL.AST
 open OzmaDB.OzmaUtils
@@ -14,13 +15,48 @@ open OzmaDB.API.Request
 open OzmaDB.API.API
 open OzmaDB.API.InstancesCache
 open OzmaDB.Triggers.Time
+open OzmaDB.HTTP.Utils
 
-type TimeTriggersWorker(loggerFactory: ILoggerFactory, instancesCache: InstancesCacheStore) =
+type TimeTriggersWorker
+    (
+        loggerFactory: ILoggerFactory,
+        instancesCache: InstancesCacheStore,
+        instancesSource: IInstancesSource
+    ) =
     inherit BackgroundService()
 
     let logger = loggerFactory.CreateLogger<TimeTriggersWorker>()
     let pollDelay = TimeSpan.FromSeconds(1.0)
     let maxBatchPerConnection = 64
+
+    let instanceConnectionString (instance: IInstance) =
+        let builder = NpgsqlConnectionStringBuilder()
+        builder.Host <- instance.Host
+        builder.Port <- instance.Port
+        builder.Database <- instance.Database
+        builder.Username <- instance.Username
+        builder.Password <- instance.Password
+        builder.Enlist <- false
+        instancesSource.SetExtraConnectionOptions(builder)
+        builder.ConnectionString
+
+    let discoverConnectionStrings (cancellationToken: CancellationToken) : Task<Set<string>> =
+        task {
+            let fromCache = instancesCache.KnownConnectionStrings |> Set.ofSeq
+            let! sourceInstances = instancesSource.GetAllInstances(cancellationToken)
+            let instances = sourceInstances |> Seq.toArray
+
+            let mutable discovered = fromCache
+
+            try
+                for instance in instances do
+                    discovered <- Set.add (instanceConnectionString instance) discovered
+            finally
+                for instance in instances do
+                    instance.Dispose()
+
+            return discovered
+        }
 
     let processOneConnection (connectionString: string) (cancellationToken: CancellationToken) : Task<int> =
         task {
@@ -120,7 +156,9 @@ type TimeTriggersWorker(loggerFactory: ILoggerFactory, instancesCache: Instances
                 try
                     let mutable totalProcessed = 0
 
-                    for connectionString in instancesCache.KnownConnectionStrings do
+                    let! connectionStrings = discoverConnectionStrings cancellationToken
+
+                    for connectionString in connectionStrings do
                         let! processed = processOneConnection connectionString cancellationToken
                         totalProcessed <- totalProcessed + processed
 
