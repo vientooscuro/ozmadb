@@ -188,6 +188,10 @@ let private getSingleRowQuery (viewExpr: CompiledViewExpr) : (ColumnType[] * SQL
     if Array.isEmpty colTypes then
         None
     else
+        // Some metadata expressions are compiled into SingleRow columns but rely on CTEs
+        // defined on the main query. Keep those CTEs available as a fallback.
+        let ctes = Option.orElse viewExpr.SingleRowQuery.CTEs viewExpr.Query.Expression.CTEs
+
         let query =
             { SQL.emptySingleSelectExpr with
                 Columns =
@@ -197,7 +201,7 @@ let private getSingleRowQuery (viewExpr: CompiledViewExpr) : (ColumnType[] * SQL
 
         let select =
             { SQL.selectExpr (SQL.SSelect query) with
-                CTEs = viewExpr.SingleRowQuery.CTEs }
+                CTEs = ctes }
 
         Some(colTypes, select)
 
