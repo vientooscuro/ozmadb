@@ -155,6 +155,26 @@ namespace OzmaDBSchema.System
         [Attributes.Index("root_row", new[] { "\"root_entity_schema\"", "\"root_entity_name\"", "\"row_id\"" })]
         public DbSet<TimeTriggerTask> TimeTriggerTasks { get; set; } = null!;
 
+        [Entity("id", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, IsHidden = true, TriggersMigration = true)]
+        [UniqueConstraint(
+            "task",
+            new[]
+            {
+                "trigger_schema",
+                "trigger_entity_schema",
+                "trigger_entity_name",
+                "trigger_name",
+                "event_entity_schema",
+                "event_entity_name",
+                "row_id",
+                "field_name"
+            },
+            IsAlternateKey = true
+        )]
+        [Attributes.Index("fired_at", new[] { "\"fired_at\"", "\"id\"" })]
+        [Attributes.Index("root_row", new[] { "\"root_entity_schema\"", "\"root_entity_name\"", "\"row_id\"" })]
+        public DbSet<TimeTriggerFired> TimeTriggerFiredRows { get; set; } = null!;
+
         [Entity("name")]
         [Attributes.Index("name", new[] { "lower(name)" }, IsUnique = true)]
         [CheckConstraint("not_reserved", "name <> ''")]
@@ -888,6 +908,63 @@ namespace OzmaDBSchema.System
 
         [ColumnField("string")]
         public string? LastError { get; set; }
+    }
+
+    public class TimeTriggerFired
+    {
+        public int Id { get; set; }
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string TriggerSchema { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string TriggerEntitySchema { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string TriggerEntityName { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string TriggerName { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string EventEntitySchema { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string EventEntityName { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string RootEntitySchema { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string RootEntityName { get; set; } = null!;
+
+        [ColumnField("int", IsImmutable = true)]
+        public int RowId { get; set; }
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string FieldName { get; set; } = null!;
+
+        [ColumnField("int", IsImmutable = true)]
+        public int OffsetValue { get; set; }
+
+        [ColumnField("enum('MINUTES', 'HOURS', 'DAYS')", IsImmutable = true)]
+        [Required]
+        public string OffsetUnit { get; set; } = "MINUTES";
+
+        [ColumnField("datetime", IsImmutable = true)]
+        public Instant DueAt { get; set; }
+
+        [ColumnField("datetime", IsImmutable = true)]
+        public Instant FiredAt { get; set; }
     }
 
     public class OutboxMessage

@@ -30,6 +30,7 @@ type ClaimedTimeTriggerTask =
       FieldName: FieldName }
 
 let private queueTableName = "public.time_trigger_tasks"
+let private firedTableName = "public.time_trigger_fired"
 
 let private triggerRefForEvent (eventEntity: ResolvedEntityRef) (trigger: MergedTrigger) : TriggerRef =
     let entityRef = Option.defaultValue eventEntity trigger.Inherited
@@ -145,6 +146,18 @@ WHERE t.%s = %s
       ELSE t.%s
     END
   ) > transaction_timestamp()
+  AND NOT EXISTS (
+    SELECT 1
+    FROM %s AS fired
+    WHERE fired.trigger_schema = v.trigger_schema
+      AND fired.trigger_entity_schema = v.trigger_entity_schema
+      AND fired.trigger_entity_name = v.trigger_entity_name
+      AND fired.trigger_name = v.trigger_name
+      AND fired.event_entity_schema = %s
+      AND fired.event_entity_name = %s
+      AND fired.row_id = t.%s
+      AND fired.field_name = %s
+  )
 ON CONFLICT (
   trigger_schema,
   trigger_entity_schema,
@@ -182,6 +195,11 @@ ON CONFLICT (
                     (columnName.ToSQLString())
                     (columnName.ToSQLString())
                     (columnName.ToSQLString())
+                    firedTableName
+                    (SQL.renderSqlString (string eventEntity.Schema))
+                    (SQL.renderSqlString (string eventEntity.Name))
+                    (SQL.renderSqlName "id")
+                    (SQL.renderSqlString (string fieldName))
 
             let! _ = query.ExecuteNonQuery q Map.empty cancellationToken
             return ()
@@ -357,7 +375,72 @@ RETURNING
 let completeClaimedTimeTrigger (query: QueryConnection) (taskId: int) (cancellationToken: CancellationToken) : Task =
     task {
         let q =
-            sprintf "DELETE FROM %s WHERE id = %s" queueTableName (SQL.renderSqlInt taskId)
+            sprintf
+                """
+WITH moved AS (
+  DELETE FROM %s
+  WHERE id = %s
+  RETURNING
+    trigger_schema,
+    trigger_entity_schema,
+    trigger_entity_name,
+    trigger_name,
+    event_entity_schema,
+    event_entity_name,
+    root_entity_schema,
+    root_entity_name,
+    row_id,
+    field_name,
+    offset_value,
+    offset_unit,
+    due_at
+)
+INSERT INTO %s (
+  trigger_schema,
+  trigger_entity_schema,
+  trigger_entity_name,
+  trigger_name,
+  event_entity_schema,
+  event_entity_name,
+  root_entity_schema,
+  root_entity_name,
+  row_id,
+  field_name,
+  offset_value,
+  offset_unit,
+  due_at,
+  fired_at
+)
+SELECT
+  trigger_schema,
+  trigger_entity_schema,
+  trigger_entity_name,
+  trigger_name,
+  event_entity_schema,
+  event_entity_name,
+  root_entity_schema,
+  root_entity_name,
+  row_id,
+  field_name,
+  offset_value,
+  offset_unit,
+  due_at,
+  transaction_timestamp()
+FROM moved
+ON CONFLICT (
+  trigger_schema,
+  trigger_entity_schema,
+  trigger_entity_name,
+  trigger_name,
+  event_entity_schema,
+  event_entity_name,
+  row_id,
+  field_name
+) DO NOTHING
+"""
+                queueTableName
+                (SQL.renderSqlInt taskId)
+                firedTableName
 
         let! _ = query.ExecuteNonQuery q Map.empty cancellationToken
         return ()
