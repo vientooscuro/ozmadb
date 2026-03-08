@@ -612,12 +612,13 @@ type EntitiesAPI(api: IOzmaDBAPI) =
                                 with
                                 | Ok() ->
                                     do!
-                                        scheduleRowTimeTriggers
+                                        scheduleUpdatedRowTimeTriggers
                                             query
                                             ctx.Layout
                                             ctx.Triggers
                                             subEntityRef
                                             id
+                                            (Map.keys args |> Set.ofSeq)
                                             ctx.CancellationToken
 
                                     return Ok resp
