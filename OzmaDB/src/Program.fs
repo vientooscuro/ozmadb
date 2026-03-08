@@ -47,6 +47,7 @@ open OzmaDB.HTTP.Utils
 open OzmaDB.Operations.Preload
 open OzmaDB.API.InstancesCache
 open OzmaDB.EventLogger
+open OzmaDB.TimeTriggersWorker
 
 // Npgsql global type mapping is deprecated, but we are not sure how to make it better now.
 #nowarn "44"
@@ -423,6 +424,15 @@ let private setupInstancesCache (webAppBuilder: WebApplicationBuilder) =
 
     ignore <| services.AddSingleton<InstancesCacheStore>(makeInstancesStore)
 
+let private setupTimeTriggersWorker (webAppBuilder: WebApplicationBuilder) =
+    let services = webAppBuilder.Services
+
+    ignore
+    <| services.AddHostedService(fun sp ->
+        let loggerFactory = sp.GetRequiredService<ILoggerFactory>()
+        let instancesCache = sp.GetRequiredService<InstancesCacheStore>()
+        new TimeTriggersWorker(loggerFactory, instancesCache))
+
 let private setupInstancesSource (webAppBuilder: WebApplicationBuilder) =
     let ozmadbSection = webAppBuilder.Configuration.GetSection("OzmaDB")
     let services = webAppBuilder.Services
@@ -567,6 +577,7 @@ let main (args: string[]) : int =
             setupJSON webAppBuilder
             setupEventLogger webAppBuilder
             setupInstancesCache webAppBuilder
+            setupTimeTriggersWorker webAppBuilder
             setupInstancesSource webAppBuilder
             setupHttpUtils webAppBuilder
 

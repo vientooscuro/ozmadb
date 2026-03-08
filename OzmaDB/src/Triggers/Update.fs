@@ -25,6 +25,7 @@ type private TriggersUpdater(db: SystemContext, allSchemas: Schema seq) as this 
         existingTrigger.OnInsert <- trigger.OnInsert
         existingTrigger.OnUpdateFields <- Array.map (fun x -> x.ToString()) trigger.OnUpdateFields
         existingTrigger.OnDelete <- trigger.OnDelete
+        existingTrigger.OnTimeFields <- Array.map (fun x -> x.ToString()) trigger.OnTimeFields
         existingTrigger.Procedure <- trigger.Procedure
 
     let updateTriggersDatabase (schema: SourceTriggersDatabase) (existingSchema: Schema) : unit =

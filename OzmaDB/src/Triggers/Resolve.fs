@@ -69,11 +69,38 @@ type private Phase1Resolver(layout: Layout, forceAllowBroken: bool) =
                 | _ -> ()
             | _ -> ()
 
+        let rawTimeFields =
+            if isNull trigger.OnTimeFields then
+                [||]
+            else
+                trigger.OnTimeFields
+
+        let timeFields =
+            try
+                Set.ofSeqUnique rawTimeFields
+            with Failure f ->
+                raisef ResolveTriggersException "Repeated time field: %s" f
+
+        for fieldName in timeFields do
+            let field =
+                match Map.tryFind fieldName entity.ColumnFields with
+                | Some f -> f
+                | None -> raisef ResolveTriggersException "Unknown time field name: %O" fieldName
+
+            match field.FieldType with
+            | FTScalar SFTDateTime -> ()
+            | _ ->
+                raisef
+                    ResolveTriggersException
+                    "TIME triggers are only supported for datetime fields: %O"
+                    fieldName
+
         { Priority = trigger.Priority
           Time = trigger.Time
           OnInsert = trigger.OnInsert
           OnUpdateFields = updateFields
           OnDelete = trigger.OnDelete
+          OnTimeFields = timeFields
           Procedure = trigger.Procedure
           AllowBroken = trigger.AllowBroken }
 

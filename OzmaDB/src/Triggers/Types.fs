@@ -26,6 +26,7 @@ type ResolvedTrigger =
       OnInsert: bool
       OnUpdateFields: TriggerUpdateFields
       OnDelete: bool
+      OnTimeFields: Set<FieldName>
       Procedure: string
       AllowBroken: bool }
 

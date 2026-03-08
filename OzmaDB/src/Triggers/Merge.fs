@@ -28,7 +28,8 @@ type MergedTriggersTime =
 [<NoEquality; NoComparison>]
 type MergedTriggersEntity =
     { Before: MergedTriggersTime
-      After: MergedTriggersTime }
+      After: MergedTriggersTime
+      OnTimeFields: Map<FieldName, MergedTrigger[]> }
 
 [<NoEquality; NoComparison>]
 type MergedTriggersSchema =
@@ -98,6 +99,14 @@ let findMergedTriggersDelete
     | None -> Seq.empty
     | Some timeTriggers -> Array.toSeq timeTriggers.OnDelete
 
+let findMergedTriggersTime
+    (entity: ResolvedEntityRef)
+    (triggers: MergedTriggers)
+    : Map<FieldName, MergedTrigger[]> =
+    match triggers.FindEntity entity with
+    | None -> Map.empty
+    | Some entityTriggers -> entityTriggers.OnTimeFields
+
 let emptyMergedTriggerTime =
     { OnInsert = [||]
       OnUpdateFields = Map.empty
@@ -105,7 +114,8 @@ let emptyMergedTriggerTime =
 
 let emptyMergedTriggersEntity: MergedTriggersEntity =
     { Before = emptyMergedTriggerTime
-      After = emptyMergedTriggerTime }
+      After = emptyMergedTriggerTime
+      OnTimeFields = Map.empty }
 
 let emptyMergedTriggersSchema: MergedTriggersSchema = { Entities = Map.empty }
 
@@ -122,7 +132,8 @@ let private mergeTriggersTime (a: MergedTriggersTime) (b: MergedTriggersTime) : 
 
 let private mergeTriggersEntity (a: MergedTriggersEntity) (b: MergedTriggersEntity) : MergedTriggersEntity =
     { Before = mergeTriggersTime a.Before b.Before
-      After = mergeTriggersTime a.After b.After }
+      After = mergeTriggersTime a.After b.After
+      OnTimeFields = Map.unionWith mergeSortedTriggers a.OnTimeFields b.OnTimeFields }
 
 let private mergeTriggersSchema (a: MergedTriggersSchema) (b: MergedTriggersSchema) : MergedTriggersSchema =
     { Entities = Map.unionWith mergeTriggersEntity a.Entities b.Entities }
@@ -140,6 +151,7 @@ let private makeOneMergedTriggerEntity
             trigger.OnInsert
             || trigger.OnUpdateFields <> TUFSet Set.empty
             || trigger.OnDelete
+            || not (Set.isEmpty trigger.OnTimeFields)
         )
     then
         None
@@ -167,7 +179,14 @@ let private makeOneMergedTriggerEntity
                 { emptyMergedTriggersEntity with
                     After = time }
 
-        Some entity
+        let onTimeFields =
+            trigger.OnTimeFields
+            |> Seq.map (fun field -> (field, [| merged |]))
+            |> Map.ofSeq
+
+        Some
+            { entity with
+                OnTimeFields = onTimeFields }
 
 let private markTriggerInherited (originalRef: ResolvedEntityRef) (trigger: MergedTrigger) : MergedTrigger =
     { trigger with
@@ -183,7 +202,8 @@ let private markEntityInherited
     (entityTriggers: MergedTriggersEntity)
     : MergedTriggersEntity =
     { Before = markTimeInherited originalRef entityTriggers.Before
-      After = markTimeInherited originalRef entityTriggers.After }
+      After = markTimeInherited originalRef entityTriggers.After
+      OnTimeFields = Map.map (fun _ -> Array.map (markTriggerInherited originalRef)) entityTriggers.OnTimeFields }
 
 type private TriggersMerger(layout: Layout) =
     let emitMergedTriggersEntity

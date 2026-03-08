@@ -20,6 +20,7 @@ open OzmaDB.Triggers.Types
 open OzmaDB.Triggers.Source
 open OzmaDB.Triggers.Merge
 open OzmaDB.Triggers.Run
+open OzmaDB.Triggers.Time
 open OzmaDB.Operations.Entity
 open OzmaDB.Operations.Command
 open OzmaDB.API.Types
@@ -436,7 +437,17 @@ type EntitiesAPI(api: IOzmaDBAPI) =
                                             afterTriggers
                                     with
                                     | Error e -> return Error { Inner = e; Operation = i }
-                                    | Ok() -> return Ok resp
+                                    | Ok() ->
+                                        do!
+                                            scheduleRowTimeTriggers
+                                                query
+                                                ctx.Layout
+                                                ctx.Triggers
+                                                req.Entity
+                                                newId
+                                                ctx.CancellationToken
+
+                                        return Ok resp
                             }
 
                         let convertOne (i, rowArgs) =
@@ -481,6 +492,16 @@ type EntitiesAPI(api: IOzmaDBAPI) =
 
                                         let responses =
                                             Array.map (fun id -> { Id = Some id }: InsertEntryResponse) newIds
+
+                                        for id in newIds do
+                                            do!
+                                                scheduleRowTimeTriggers
+                                                    query
+                                                    ctx.Layout
+                                                    ctx.Triggers
+                                                    req.Entity
+                                                    id
+                                                    ctx.CancellationToken
 
                                         for (reqArgs, resp) in Seq.zip req.Entries responses do
                                             let singleReq =
@@ -589,7 +610,17 @@ type EntitiesAPI(api: IOzmaDBAPI) =
                                 match!
                                     Seq.foldResultTask (applyUpdateTriggerAfter req.Entity id args) () afterTriggers
                                 with
-                                | Ok() -> return Ok resp
+                                | Ok() ->
+                                    do!
+                                        scheduleRowTimeTriggers
+                                            query
+                                            ctx.Layout
+                                            ctx.Triggers
+                                            subEntityRef
+                                            id
+                                            ctx.CancellationToken
+
+                                    return Ok resp
                                 | Error e -> return Error e
                     with
                     | :? ArgumentCheckException as e when e.IsUserException ->
@@ -646,7 +677,9 @@ type EntitiesAPI(api: IOzmaDBAPI) =
 
                             match! Seq.foldResultTask (applyDeleteTriggerAfter req.Entity) () afterTriggers with
                             | Error e -> return Error e
-                            | Ok() -> return Ok()
+                            | Ok() ->
+                                do! removeRowTimeTriggers query ctx.Layout req.Entity id ctx.CancellationToken
+                                return Ok()
                     with
                     | :? ArgumentCheckException as e when e.IsUserException ->
                         logger.LogError(e, "Invalid arguments for entity delete")

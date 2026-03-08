@@ -20,12 +20,19 @@ let timeCasesMap =
     |> dict
 
 let private makeSourceAttributeField (trig: Trigger) : SourceTrigger =
+    let onTimeFields =
+        if isNull trig.OnTimeFields then
+            [||]
+        else
+            trig.OnTimeFields
+
     { AllowBroken = trig.AllowBroken
       Priority = trig.Priority
       Time = timeCasesMap.[trig.Time]
       OnInsert = trig.OnInsert
       OnUpdateFields = Array.map OzmaQLName trig.OnUpdateFields
       OnDelete = trig.OnDelete
+      OnTimeFields = Array.map OzmaQLName onTimeFields
       Procedure = trig.Procedure }
 
 let private makeSourceTriggersDatabase (schema: Schema) : SourceTriggersDatabase =

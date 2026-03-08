@@ -67,6 +67,7 @@
     <Compile Include="src/Triggers/Source.fs" />
     <Compile Include="src/Triggers/Types.fs" />
     <Compile Include="src/Triggers/Merge.fs" />
+    <Compile Include="src/Triggers/Time.fs" />
 
     <!-- Needed early for OzmaQL compilation -->
     <Compile Include="src/Attributes/Source.fs" />
@@ -162,6 +163,7 @@
     <Compile Include="src/API/Permissions.fs" />
     <Compile Include="src/API/Domains.fs" />
     <Compile Include="src/API/API.fs" />
+    <Compile Include="src/TimeTriggersWorker.fs" />
 
     <Compile Include="src/HTTP/RateLimit.fs" />
     <Compile Include="src/HTTP/LongRunning.fs" />

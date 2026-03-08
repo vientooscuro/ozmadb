@@ -30,6 +30,7 @@ type SourceTrigger =
       OnInsert: bool
       OnUpdateFields: FieldName[]
       OnDelete: bool
+      OnTimeFields: FieldName[]
       Procedure: string }
 
 type SourceTriggersEntity =

@@ -2,6 +2,7 @@ module OzmaDB.API.InstancesCache
 
 open System
 open System.Threading.Tasks
+open System.Collections.Concurrent
 open Microsoft.Extensions.Logging
 open FluidCaching
 
@@ -18,6 +19,7 @@ type InstancesCacheParams =
 
 type InstancesCacheStore(cacheParams: InstancesCacheParams) =
     let hashedPreload = HashedPreload cacheParams.Preload
+    let knownConnections = ConcurrentDictionary<string, unit>()
 
     // FIXME: random values
     let instancesMemCache =
@@ -44,6 +46,9 @@ type InstancesCacheStore(cacheParams: InstancesCacheParams) =
     let instanceCreator = ItemCreator createInstance
 
     member this.GetContextCache(connectionString: string) =
+        ignore <| knownConnections.TryAdd(connectionString, ())
         instancesMemIndex.GetItem(connectionString, instanceCreator)
+
+    member this.KnownConnectionStrings = knownConnections.Keys :> seq<string>
 
     member this.Clear() = instancesMemCache.Clear()

@@ -111,6 +111,27 @@ namespace OzmaDBSchema.System
         [UniqueConstraint("name", new[] { "schema_id", "trigger_entity_id", "name" }, IsAlternateKey = true)]
         public DbSet<Trigger> Triggers { get; set; } = null!;
 
+        [Entity("id", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, IsHidden = true, TriggersMigration = true)]
+        [UniqueConstraint(
+            "task",
+            new[]
+            {
+                "trigger_schema",
+                "trigger_entity_schema",
+                "trigger_entity_name",
+                "trigger_name",
+                "event_entity_schema",
+                "event_entity_name",
+                "row_id",
+                "field_name"
+            },
+            IsAlternateKey = true
+        )]
+        [Attributes.Index("due_at", new[] { "\"due_at\"", "\"id\"" })]
+        [Attributes.Index("locked_until", new[] { "\"locked_until\"" })]
+        [Attributes.Index("root_row", new[] { "\"root_entity_schema\"", "\"root_entity_name\"", "\"row_id\"" })]
+        public DbSet<TimeTriggerTask> TimeTriggerTasks { get; set; } = null!;
+
         [Entity("name")]
         [Attributes.Index("name", new[] { "lower(name)" }, IsUnique = true)]
         [CheckConstraint("not_reserved", "name <> ''")]
@@ -716,9 +737,68 @@ namespace OzmaDBSchema.System
         [ColumnField("bool", Default = "false")]
         public bool OnDelete { get; set; }
 
+        [ColumnField("array(string)", Default = "array[]")]
+        public string[] OnTimeFields { get; set; } = new string[0];
+
         [ColumnField("string")]
         [Required]
         public string Procedure { get; set; } = null!;
+    }
+
+    public class TimeTriggerTask
+    {
+        public int Id { get; set; }
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string TriggerSchema { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string TriggerEntitySchema { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string TriggerEntityName { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string TriggerName { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string EventEntitySchema { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string EventEntityName { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string RootEntitySchema { get; set; } = null!;
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string RootEntityName { get; set; } = null!;
+
+        [ColumnField("int", IsImmutable = true)]
+        public int RowId { get; set; }
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string FieldName { get; set; } = null!;
+
+        [ColumnField("datetime")]
+        public Instant DueAt { get; set; }
+
+        [ColumnField("datetime")]
+        public Instant? LockedUntil { get; set; }
+
+        [ColumnField("int", Default = "0")]
+        public int Attempts { get; set; }
+
+        [ColumnField("string")]
+        public string? LastError { get; set; }
     }
 
     public class User
