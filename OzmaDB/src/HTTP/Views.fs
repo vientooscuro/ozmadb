@@ -142,7 +142,7 @@ let viewsApi (serviceProvider: IServiceProvider) : Endpoint list =
     let postViewInfo (source: UserViewSource) (maybeReq: JToken option) =
         match maybeReq with
         | None -> safeBindJson (doPostViewInfo source)
-        | Some req -> bindJsonToken req (doPostSelectFromView source)
+        | Some req -> bindJsonToken req (doPostViewInfo source)
 
     let returnViewExplain (api: IOzmaDBAPI) (req: UserViewExplainRequest) =
         task {
