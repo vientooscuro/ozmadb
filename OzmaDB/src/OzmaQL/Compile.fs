@@ -1059,6 +1059,7 @@ type private QueryCompiler
     // Only compiler can robustly detect used schemas and arguments, accounting for meta columns.
     let mutable arguments = initialArguments
     let mutable usedDatabase = emptyUsedDatabase
+    let mutable referenceArgumentCache: Map<string, SQL.SelectExpr> = Map.empty
 
     let replacer = NameReplacer()
 
@@ -1609,71 +1610,91 @@ type private QueryCompiler
         (path: PathArrow seq)
         (boundPath: ResolvedEntityRef seq)
         : SQL.SelectExpr =
-        let (referencedRef, remainingBoundPath) = Seq.snoc boundPath
-        let (firstArrow, remainingPath) = Seq.snoc path
+        let pathKey =
+            path
+            |> Seq.map (fun arrow -> sprintf "%O:%b" arrow.Name arrow.AsRoot)
+            |> String.concat "/"
 
-        let argTableRef = compileRenamedResolvedEntityRef referencedRef
-        let pathWithEntities = Seq.zip remainingBoundPath remainingPath |> List.ofSeq
-        let firstField = layout.FindField referencedRef firstArrow.Name |> Option.get
+        let boundPathKey =
+            boundPath
+            |> Seq.map (fun ent -> sprintf "%O.%O" ent.Schema ent.Name)
+            |> String.concat "/"
 
-        let fromEntity =
-            { Ref = relaxEntityRef referencedRef
-              Only = false
-              Alias = None
-              AsRoot = asRoot
-              Extra = ObjectMap.empty }
+        let cacheKey = sprintf "%i|%b|%s|%s" arg.PlaceholderId asRoot pathKey boundPathKey
 
-        let (fromRes, from) = compileFromExpr ctx 0 None true (FEntity fromEntity)
-        assert (fromRes.Joins.NextJoinId = 0)
+        let buildSelect () : SQL.SelectExpr =
+            let (referencedRef, remainingBoundPath) = Seq.snoc boundPath
+            let (firstArrow, remainingPath) = Seq.snoc path
 
-        let argIdRef =
-            SQL.VEColumn
-                { Table = Some argTableRef
-                  Name = sqlFunId }
+            let argTableRef = compileRenamedResolvedEntityRef referencedRef
+            let pathWithEntities = Seq.zip remainingBoundPath remainingPath |> List.ofSeq
+            let firstField = layout.FindField referencedRef firstArrow.Name |> Option.get
 
-        let pathArgs =
-            { Context = ctx
-              Extra = extra
-              Paths = emptyJoinPaths
-              CheckNullExpr = Some argIdRef
-              TableRef = Some argTableRef
-              AsRoot = asRoot }
-            : CompileBoundRefArgs
+            let fromEntity =
+                { Ref = relaxEntityRef referencedRef
+                  Only = false
+                  Alias = None
+                  AsRoot = asRoot
+                  Extra = ObjectMap.empty }
 
-        let fieldRef =
-            { Entity = referencedRef
-              Name = firstArrow.Name }
+            let (fromRes, from) = compileFromExpr ctx 0 None true (FEntity fromEntity)
+            assert (fromRes.Joins.NextJoinId = 0)
 
-        let columnName = resolvedFieldColumnName firstField.Field
+            let argIdRef =
+                SQL.VEColumn
+                    { Table = Some argTableRef
+                      Name = sqlFunId }
 
-        let (argPaths, expr) =
-            compileBoundPath pathArgs fieldRef columnName pathWithEntities
+            let pathArgs =
+                { Context = ctx
+                  Extra = extra
+                  Paths = emptyJoinPaths
+                  CheckNullExpr = Some argIdRef
+                  TableRef = Some argTableRef
+                  AsRoot = asRoot }
+                : CompileBoundRefArgs
 
-        let (entitiesMap, from) =
-            buildJoins layout (fromToEntitiesMap fromRes.Tables) from (joinsToSeq argPaths.Map)
+            let fieldRef =
+                { Entity = referencedRef
+                  Name = firstArrow.Name }
 
-        let whereWithoutSubentities =
-            SQL.VEBinaryOp(argIdRef, SQL.BOEq, SQL.VEPlaceholder arg.PlaceholderId)
+            let columnName = resolvedFieldColumnName firstField.Field
 
-        let where = addEntityChecks entitiesMap (Some whereWithoutSubentities)
+            let (argPaths, expr) =
+                compileBoundPath pathArgs fieldRef columnName pathWithEntities
 
-        let extra =
-            { Entities = entitiesMap
-              Joins = argPaths
-              WhereWithoutSubentities = Some whereWithoutSubentities }
-            : SelectFromInfo
+            let (entitiesMap, from) =
+                buildJoins layout (fromToEntitiesMap fromRes.Tables) from (joinsToSeq argPaths.Map)
 
-        // TODO: This SELECT could be moved into a CTE to improve case with multiple usages of the same argument.
-        let singleSelect =
-            { SQL.emptySingleSelectExpr with
-                Columns = [| SQL.SCExpr(None, expr) |]
-                From = Some from
-                Where = where
-                Extra = extra }
+            let whereWithoutSubentities =
+                SQL.VEBinaryOp(argIdRef, SQL.BOEq, SQL.VEPlaceholder arg.PlaceholderId)
 
-        { CTEs = None
-          Tree = SQL.SSelect singleSelect
-          Extra = null }
+            let where = addEntityChecks entitiesMap (Some whereWithoutSubentities)
+
+            let extra =
+                { Entities = entitiesMap
+                  Joins = argPaths
+                  WhereWithoutSubentities = Some whereWithoutSubentities }
+                : SelectFromInfo
+
+            // TODO: This SELECT could be moved into a CTE to improve case with multiple usages of the same argument.
+            let singleSelect =
+                { SQL.emptySingleSelectExpr with
+                    Columns = [| SQL.SCExpr(None, expr) |]
+                    From = Some from
+                    Where = where
+                    Extra = extra }
+
+            { CTEs = None
+              Tree = SQL.SSelect singleSelect
+              Extra = null }
+
+        match Map.tryFind cacheKey referenceArgumentCache with
+        | Some cached -> cached
+        | None ->
+            let ret = buildSelect ()
+            referenceArgumentCache <- Map.add cacheKey ret referenceArgumentCache
+            ret
 
     and compileLinkedFieldRef
         (ctx: ExprContext)
