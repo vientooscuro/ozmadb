@@ -226,7 +226,7 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
         openAndCheckTransaction
             cacheParams.LoggerFactory
             cacheParams.ConnectionString
-            IsolationLevel.Serializable
+            IsolationLevel.ReadCommitted
             cancellationToken
             (fun ts -> getCurrentVersion ts cancellationToken)
 
