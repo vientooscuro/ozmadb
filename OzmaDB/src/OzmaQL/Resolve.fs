@@ -2397,10 +2397,9 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
 
     let matchesWildcardAlias (alias: EntityRef) (entity: EntityRef) =
         alias.Name = entity.Name
-        &&
-        match alias.Schema with
-        | None -> true
-        | Some aliasSchema -> Some aliasSchema = entity.Schema
+        && match alias.Schema with
+           | None -> true
+           | Some aliasSchema -> Some aliasSchema = entity.Schema
 
     let wildcardFieldRefs (ctx: Context) (mAlias: EntityRef option) : FieldRef[] =
         let mkInfo entityId entityRef fieldName =
@@ -2413,20 +2412,23 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
             | None -> (fun (_: EntityRef) -> true)
             | Some alias -> matchesWildcardAlias alias
 
-        let canUseField (info: {| EntityId: FromEntityId; EntityRef: EntityRef option; FieldName: FieldName |}) =
+        let canUseField
+            (info:
+                {| EntityId: FromEntityId
+                   EntityRef: EntityRef option
+                   FieldName: FieldName |})
+            =
             Set.contains info.EntityId ctx.LocalEntities
             && not (isWildcardInternalField info.FieldName)
-            &&
-            match info.EntityRef with
-            | None -> false
-            | Some entity -> isAllowedEntity entity
+            && match info.EntityRef with
+               | None -> false
+               | Some entity -> isAllowedEntity entity
 
         let wildcardInfoSeq =
             ctx.FieldMaps
             |> Seq.collect Map.toSeq
             |> Seq.choose (function
-                | ({ Name = fieldName }, FVResolved info) ->
-                    Some(mkInfo info.EntityId info.Entity fieldName)
+                | ({ Name = fieldName }, FVResolved info) -> Some(mkInfo info.EntityId info.Entity fieldName)
                 | (_, FVAmbiguous _) -> None)
             |> Seq.filter canUseField
             |> Seq.distinctBy (fun info -> (info.EntityId, info.FieldName))

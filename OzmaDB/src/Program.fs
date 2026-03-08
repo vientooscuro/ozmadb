@@ -119,10 +119,7 @@ type private DatabaseInstances
                                 setupDbContextLogging loggerFactory builder
 
                                 ignore
-                                <| builder.UseNpgsql(
-                                    connectionString,
-                                    fun opts -> ignore <| opts.UseNodaTime()
-                                )
+                                <| builder.UseNpgsql(connectionString, (fun opts -> ignore <| opts.UseNodaTime()))
 
                                 new InstancesContext(builder.Options)
 
@@ -270,10 +267,7 @@ type private StaticInstance
                 | Some instance -> instance |> getInstance |> Some |> Task.result
 
         member this.GetAllInstances(cancellationToken: CancellationToken) =
-            let known =
-                instances
-                |> Map.values
-                |> Seq.map getInstance
+            let known = instances |> Map.values |> Seq.map getInstance
 
             let all =
                 match defaultInstance with

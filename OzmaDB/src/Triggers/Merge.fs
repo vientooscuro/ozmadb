@@ -99,10 +99,7 @@ let findMergedTriggersDelete
     | None -> Seq.empty
     | Some timeTriggers -> Array.toSeq timeTriggers.OnDelete
 
-let findMergedTriggersTime
-    (entity: ResolvedEntityRef)
-    (triggers: MergedTriggers)
-    : Map<FieldName, MergedTrigger[]> =
+let findMergedTriggersTime (entity: ResolvedEntityRef) (triggers: MergedTriggers) : Map<FieldName, MergedTrigger[]> =
     match triggers.FindEntity entity with
     | None -> Map.empty
     | Some entityTriggers -> entityTriggers.OnTimeFields

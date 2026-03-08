@@ -89,11 +89,7 @@ type private Phase1Resolver(layout: Layout, forceAllowBroken: bool) =
 
             match field.FieldType with
             | FTScalar SFTDateTime -> ()
-            | _ ->
-                raisef
-                    ResolveTriggersException
-                    "TIME triggers are only supported for datetime fields: %O"
-                    fieldName
+            | _ -> raisef ResolveTriggersException "TIME triggers are only supported for datetime fields: %O" fieldName
 
         { Priority = trigger.Priority
           Time = trigger.Time

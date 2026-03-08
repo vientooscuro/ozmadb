@@ -1488,11 +1488,7 @@ let private prettifyTriggerMeta (trigger: SourceTrigger) : PrettyTriggerMeta =
       OnTimeFields = trigger.OnTimeFields }
 
 let private deprettifyTrigger (meta: PrettyTriggerMeta) (procedure: string) : SourceTrigger =
-    let onTimeFields =
-        if isNull meta.OnTimeFields then
-            [||]
-        else
-            meta.OnTimeFields
+    let onTimeFields = if isNull meta.OnTimeFields then [||] else meta.OnTimeFields
 
     { AllowBroken = meta.AllowBroken
       Priority = meta.Priority

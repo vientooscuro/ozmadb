@@ -20,11 +20,7 @@ let timeCasesMap =
     |> dict
 
 let private makeSourceAttributeField (trig: Trigger) : SourceTrigger =
-    let onTimeFields =
-        if isNull trig.OnTimeFields then
-            [||]
-        else
-            trig.OnTimeFields
+    let onTimeFields = if isNull trig.OnTimeFields then [||] else trig.OnTimeFields
 
     { AllowBroken = trig.AllowBroken
       Priority = trig.Priority

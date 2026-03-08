@@ -171,6 +171,7 @@ let scheduleRowTimeTriggers
 
             for KeyValue(fieldName, mergedTriggers) in byField do
                 let columnName = (Map.find fieldName entity.ColumnFields).ColumnName
+
                 do!
                     enqueueSingleField
                         query
@@ -196,9 +197,7 @@ let removeRowTimeTriggers
         | Some entity -> return! queueDeleteByRootAndRow query entity.Root rowId cancellationToken
     }
 
-let private parseClaimedTask
-    (row: (SQL.SQLName * SQL.SimpleValueType * SQL.Value)[])
-    : ClaimedTimeTriggerTask =
+let private parseClaimedTask (row: (SQL.SQLName * SQL.SimpleValueType * SQL.Value)[]) : ClaimedTimeTriggerTask =
     let get idx =
         let (_, _, value) = row.[idx]
         value
@@ -283,13 +282,11 @@ RETURNING
         | Some row -> return Some(parseClaimedTask row)
     }
 
-let completeClaimedTimeTrigger
-    (query: QueryConnection)
-    (taskId: int)
-    (cancellationToken: CancellationToken)
-    : Task =
+let completeClaimedTimeTrigger (query: QueryConnection) (taskId: int) (cancellationToken: CancellationToken) : Task =
     task {
-        let q = sprintf "DELETE FROM %s WHERE id = %s" queueTableName (SQL.renderSqlInt taskId)
+        let q =
+            sprintf "DELETE FROM %s WHERE id = %s" queueTableName (SQL.renderSqlInt taskId)
+
         let! _ = query.ExecuteNonQuery q Map.empty cancellationToken
         return ()
     }
@@ -306,12 +303,9 @@ let failClaimedTimeTrigger
         let maxErrorLength = 3000
 
         let safeError =
-            if String.IsNullOrEmpty(error) then
-                "unknown"
-            elif error.Length <= maxErrorLength then
-                error
-            else
-                error.Substring(0, maxErrorLength)
+            if String.IsNullOrEmpty(error) then "unknown"
+            elif error.Length <= maxErrorLength then error
+            else error.Substring(0, maxErrorLength)
 
         let q =
             sprintf

@@ -18,11 +18,7 @@ open OzmaDB.Triggers.Time
 open OzmaDB.HTTP.Utils
 
 type TimeTriggersWorker
-    (
-        loggerFactory: ILoggerFactory,
-        instancesCache: InstancesCacheStore,
-        instancesSource: IInstancesSource
-    ) =
+    (loggerFactory: ILoggerFactory, instancesCache: InstancesCacheStore, instancesSource: IInstancesSource) =
     inherit BackgroundService()
 
     let logger = loggerFactory.CreateLogger<TimeTriggersWorker>()
@@ -63,7 +59,9 @@ type TimeTriggersWorker
             let mutable processed = 0
             let mutable shouldContinue = true
 
-            while shouldContinue && processed < maxBatchPerConnection && not cancellationToken.IsCancellationRequested do
+            while shouldContinue
+                  && processed < maxBatchPerConnection
+                  && not cancellationToken.IsCancellationRequested do
                 let! cache = instancesCache.GetContextCache(connectionString)
 
                 use! ctx = cache.GetCache(cancellationToken)
@@ -108,6 +106,7 @@ type TimeTriggersWorker
                                                         claimedTask.FieldName
                                                         claimedTask.DueAt
                                                         cancellationToken
+
                                                 return ()
                                             }
 
@@ -118,11 +117,7 @@ type TimeTriggersWorker
 
                     match runResult with
                     | Ok() ->
-                        do!
-                            completeClaimedTimeTrigger
-                                ctx.Transaction.Connection.Query
-                                claimedTask.Id
-                                cancellationToken
+                        do! completeClaimedTimeTrigger ctx.Transaction.Connection.Query claimedTask.Id cancellationToken
                     | Error err ->
                         logger.LogError(
                             "Time trigger execution failed for {trigger} (task {id}): {error}",
