@@ -1,6 +1,9 @@
 module OzmaDB.API.JavaScript
 
 open Printf
+open System
+open System.Linq
+open System.Text
 open System.Threading
 open System.Threading.Tasks
 open System.Runtime.Serialization
@@ -9,6 +12,7 @@ open Microsoft.ClearScript
 open Microsoft.ClearScript.JavaScript
 open Newtonsoft.Json
 open Newtonsoft.Json.Linq
+open NodaTime
 
 open OzmaDB.OzmaUtils
 open OzmaDB.OzmaUtils.Serialization.Utils
@@ -17,6 +21,34 @@ open OzmaDB.OzmaQL.Utils
 open OzmaDB.API.Types
 open OzmaDB.JavaScript.Json
 open OzmaDB.JavaScript.Runtime
+open OzmaDB.Outbox.HTTP
+open OzmaDBSchema.System
+
+[<NoComparison; NoEquality>]
+type JSOutboxSettings =
+    { Enabled: bool
+      DefaultTimeoutMs: int
+      MaxTimeoutMs: int
+      MaxRetries: int
+      RetryBaseDelayMs: int
+      MaxBodyBytes: int }
+
+[<NoComparison; NoEquality>]
+type JSHostSettings =
+    { HttpPolicy: OutboundHttpPolicy
+      Outbox: JSOutboxSettings }
+
+let defaultJSOutboxSettings =
+    { Enabled = true
+      DefaultTimeoutMs = 5000
+      MaxTimeoutMs = 15000
+      MaxRetries = 5
+      RetryBaseDelayMs = 500
+      MaxBodyBytes = 256 * 1024 }
+
+let defaultJSHostSettings =
+    { HttpPolicy = defaultOutboundHttpPolicy
+      Outbox = defaultJSOutboxSettings }
 
 [<SerializeAsObject("error")>]
 type APICallErrorInfo =
@@ -45,6 +77,34 @@ type APICallErrorInfo =
 // We don't declare these private because JSON serialization then breaks.
 // See https://stackoverflow.com/questions/54169707/f-internal-visibility-changes-record-constructor-behavior
 type WriteEventRequest = { Details: JToken }
+
+type HttpRequestBody =
+    { Url: string
+      Method: string option
+      Headers: JObject option
+      Body: JToken option
+      TimeoutMs: int option
+      Retries: int option
+      RetryBaseDelayMs: int option }
+
+type HttpRequestResponse =
+    { Status: int
+      Url: string
+      Headers: Map<string, string[]>
+      Body: string
+      Json: JToken option }
+
+type EnqueueOutboxRequest =
+    { Url: string
+      Method: string option
+      Headers: JObject option
+      Body: JToken option
+      TimeoutMs: int option
+      MaxRetries: int option
+      RetryBaseDelayMs: int option
+      DelayMs: int option }
+
+type EnqueueOutboxResponse = { Id: int }
 
 type private APIHandle(api: IOzmaDBAPI) =
     let logger = api.Request.Context.LoggerFactory.CreateLogger<APIHandle>()
@@ -224,6 +284,14 @@ let private preludeSource =
             return apiProxy.WriteEventSync({ details });
         };
 
+        httpRequest(req) {
+            return apiProxy.HttpRequest(req);
+        };
+
+        enqueueHttpRequest(req) {
+            return apiProxy.EnqueueOutboxHttpRequest(req);
+        };
+
         cancelWith(userData, message) {
             throw new OzmaDBError({ message, userData });
         };
@@ -274,11 +342,13 @@ let private preludeDoc =
     RuntimeLocal(fun runtime -> runtime.Runtime.Compile(info, preludeSource))
 
 [<DefaultScriptUsage(ScriptAccess.None)>]
-type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment) as this =
+type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettings) as this =
     inherit SchedulerJSEngine<Task.SerializingTrackingTaskScheduler>(runtime, env)
 
     let mutable topLevelAPI = None: IOzmaDBAPI option
     let apiHandle = AsyncLocal<APIHandle>()
+    let httpPolicy = normalizePolicy settings.HttpPolicy
+    let outboxSettings = settings.Outbox
 
     do
         this.Engine.AddHostObject("unwrappedApiProxy", this)
@@ -300,6 +370,49 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment) as this =
         ksprintf thenRaise format
 
     member private this.FormatError format = this.FormatErrorWithInner null format
+
+    member private this.ClampOrDefault (value: int option) (defaultValue: int) (minValue: int) (maxValue: int) =
+        value |> Option.defaultValue defaultValue |> min maxValue |> max minValue
+
+    member private this.HeadersMap (headers: JObject option) : Map<string, string> =
+        match headers with
+        | None -> Map.empty
+        | Some raw ->
+            raw.Properties()
+            |> Seq.choose (fun p ->
+                match p.Value with
+                | :? JValue as v when v.Type = JTokenType.String -> Some(p.Name, string v.Value)
+                | _ -> None)
+            |> Map.ofSeq
+
+    member private this.WithSerializedBody (headers: Map<string, string>) (body: JToken option) : Map<string, string> * string option =
+        match body with
+        | None -> (headers, None)
+        | Some token when token.Type = JTokenType.Null -> (headers, None)
+        | Some token when token.Type = JTokenType.String ->
+            let txt = token.Value<string>()
+            (headers, Some txt)
+        | Some token ->
+            let hasContentType =
+                headers
+                |> Seq.exists (fun (KeyValue(k, _)) -> String.Equals(k, "content-type", StringComparison.OrdinalIgnoreCase))
+
+            let headers =
+                if hasContentType then headers else Map.add "content-type" "application/json" headers
+
+            let txt = JsonConvert.SerializeObject(token, Formatting.None)
+            (headers, Some txt)
+
+    member private this.ParseResponseJson(body: string) : JToken option =
+        if String.IsNullOrWhiteSpace(body) then
+            None
+        else
+            try
+                Some <| JToken.Parse(body)
+            with _ ->
+                None
+
+    member private this.GetCurrentSchemaId() : int option = None
 
     member private this.Deserialize(v: obj) : 'a =
         let ret =
@@ -484,6 +597,112 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment) as this =
             handle.API.Request.WriteEventSync(fun event ->
                 event.Type <- "writeEvent"
                 event.Request <- JsonConvert.SerializeObject req)
+
+    [<ScriptUsage(ScriptAccess.Full)>]
+    member this.HttpRequest(arg: obj) =
+        this.WrapAsyncHostFunction
+        <| fun () ->
+            task {
+                let req = this.Deserialize arg: HttpRequestBody
+                let headers = this.HeadersMap req.Headers
+                let (headers, body) = this.WithSerializedBody headers req.Body
+
+                let timeoutMs =
+                    this.ClampOrDefault req.TimeoutMs httpPolicy.DefaultTimeoutMs 1 httpPolicy.MaxTimeoutMs
+
+                let retries = this.ClampOrDefault req.Retries httpPolicy.MaxRetries 0 httpPolicy.MaxRetries
+                let retryBaseDelayMs = this.ClampOrDefault req.RetryBaseDelayMs httpPolicy.RetryBaseDelayMs 1 30000
+
+                let method =
+                    req.Method
+                    |> Option.defaultValue "GET"
+                    |> fun m -> m.Trim().ToUpperInvariant()
+
+                let request: HttpDispatchRequest =
+                    { Method = method
+                      Url = req.Url
+                      Headers = headers
+                      Body = body
+                      TimeoutMs = Some timeoutMs
+                      Retries = Some retries
+                      RetryBaseDelayMs = Some retryBaseDelayMs }
+
+                let cancellationToken = this.GetHandle().API.Request.Context.CancellationToken
+                let! response = dispatchHttp httpPolicy request cancellationToken
+
+                let parsed =
+                    { Status = response.Status
+                      Url = response.Url
+                      Headers = response.Headers
+                      Body = response.Body
+                      Json = this.ParseResponseJson response.Body }
+
+                return this.Json.Serialize(parsed)
+            }
+
+    [<ScriptUsage(ScriptAccess.Full)>]
+    member this.EnqueueOutboxHttpRequest(arg: obj) =
+        this.WrapAsyncHostFunction
+        <| fun () ->
+            task {
+                if not outboxSettings.Enabled then
+                    this.FormatError "Outbox is disabled"
+
+                let req = this.Deserialize arg: EnqueueOutboxRequest
+                let headers = this.HeadersMap req.Headers
+                let (headers, body) = this.WithSerializedBody headers req.Body
+
+                match body with
+                | Some b when Encoding.UTF8.GetByteCount(b) > outboxSettings.MaxBodyBytes ->
+                    this.FormatError "Outbox body exceeds max configured size"
+                | _ -> ()
+
+                match validateUrlAgainstPolicy httpPolicy req.Url with
+                | Error err -> this.FormatError "%s" err
+                | Ok _ -> ()
+
+                let timeoutMs =
+                    this.ClampOrDefault req.TimeoutMs outboxSettings.DefaultTimeoutMs 1 outboxSettings.MaxTimeoutMs
+
+                let maxRetries = this.ClampOrDefault req.MaxRetries outboxSettings.MaxRetries 0 1000
+
+                let retryBaseDelayMs =
+                    this.ClampOrDefault req.RetryBaseDelayMs outboxSettings.RetryBaseDelayMs 1 30000
+
+                let method =
+                    req.Method
+                    |> Option.defaultValue "POST"
+                    |> fun m -> m.Trim().ToUpperInvariant()
+
+                let dueAt =
+                    let delayMs = req.DelayMs |> Option.defaultValue 0 |> max 0
+                    SystemClock.Instance.GetCurrentInstant() + Duration.FromMilliseconds(float delayMs)
+
+                let schemaId = this.GetCurrentSchemaId()
+                let handle = this.GetHandle()
+                let tx = handle.API.Request.Context.Transaction
+                let headersJson = JsonConvert.SerializeObject(headers, Formatting.None)
+                let bodyObj = body |> Option.toObj
+                let timeoutMsObj = timeoutMs |> Nullable
+                let schemaIdObj = schemaId |> Option.toNullable
+
+                let outbox = OutboxMessage()
+                outbox.SchemaId <- schemaIdObj
+                outbox.Method <- method
+                outbox.Url <- req.Url
+                outbox.Headers <- headersJson
+                outbox.Body <- bodyObj
+                outbox.TimeoutMs <- timeoutMsObj
+                outbox.MaxRetries <- maxRetries
+                outbox.RetryBaseDelayMs <- retryBaseDelayMs
+                outbox.DueAt <- dueAt
+                outbox.Attempts <- 0
+
+                ignore <| tx.System.OutboxMessages.Add(outbox)
+                let! _ = tx.SystemSaveChangesAsync(handle.API.Request.Context.CancellationToken)
+
+                return this.Json.Serialize({ Id = outbox.Id }: EnqueueOutboxResponse)
+            }
 
     override this.CreateScheduler() = Task.SerializingTrackingTaskScheduler()
 

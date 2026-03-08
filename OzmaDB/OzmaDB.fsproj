@@ -124,6 +124,8 @@
     <Compile Include="src/Actions/Schema.fs" />
     <Compile Include="src/Actions/Run.fs" />
     <Compile Include="src/Actions/Schedule.fs" />
+    <Compile Include="src/Outbox/HTTP.fs" />
+    <Compile Include="src/Outbox/Queue.fs" />
 
     <Compile Include="src/Triggers/Resolve.fs" />
     <Compile Include="src/Triggers/Run.fs" />
@@ -176,6 +178,7 @@
     <Compile Include="src/HTTP/Permissions.fs" />
     <Compile Include="src/HTTP/Domains.fs" />
     <Compile Include="src/TimeTriggersWorker.fs" />
+    <Compile Include="src/OutboxWorker.fs" />
 
     <Compile Include="src/Program.fs" />
   </ItemGroup>

@@ -10,12 +10,14 @@ open OzmaDB.OzmaUtils
 open OzmaDB.EventLogger
 open OzmaDB.Operations.Preload
 open OzmaDB.API.ContextCache
+open OzmaDB.API.JavaScript
 
 type InstancesCacheParams =
     { LoggerFactory: ILoggerFactory
       Preload: Preload
       AllowAutoMark: bool
-      EventLogger: EventLogger }
+      EventLogger: EventLogger
+      JSHostSettings: JSHostSettings }
 
 type InstancesCacheStore(cacheParams: InstancesCacheParams) =
     let hashedPreload = HashedPreload cacheParams.Preload
@@ -39,7 +41,8 @@ type InstancesCacheStore(cacheParams: InstancesCacheParams) =
               AllowAutoMark = cacheParams.AllowAutoMark
               LoggerFactory = cacheParams.LoggerFactory
               Preload = hashedPreload
-              EventLogger = cacheParams.EventLogger }
+              EventLogger = cacheParams.EventLogger
+              JSHostSettings = cacheParams.JSHostSettings }
 
         Task.FromResult <| ContextCacheStore cacheParams
 

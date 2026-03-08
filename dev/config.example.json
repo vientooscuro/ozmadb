@@ -36,6 +36,32 @@
     "jobs": {
       "remoteIdleTimeout": "00:00:10",
       "hybridLocalTimeout": "00:00:25"
+    },
+    "javaScript": {
+      "http": {
+        "enabled": false,
+        "allowedHosts": [
+          "api.example.com",
+          "*.internal.example.com"
+        ],
+        "defaultTimeoutMs": 5000,
+        "maxTimeoutMs": 15000,
+        "maxRetries": 2,
+        "retryBaseDelayMs": 200,
+        "userAgent": "ozmadb/0.0"
+      },
+      "outbox": {
+        "enabled": true,
+        "defaultTimeoutMs": 5000,
+        "maxTimeoutMs": 15000,
+        "maxRetries": 5,
+        "retryBaseDelayMs": 500,
+        "maxBodyBytes": 262144
+      }
+    },
+    "outboxWorker": {
+      "pollDelayMs": 1000,
+      "maxBatchPerConnection": 64
     }
   }
 }

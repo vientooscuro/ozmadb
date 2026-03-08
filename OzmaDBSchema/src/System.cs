@@ -119,6 +119,16 @@ namespace OzmaDBSchema.System
         [Attributes.Index("action_name", new[] { "\"schema_id\"", "\"action_name\"" })]
         public DbSet<ActionSchedule> ActionSchedules { get; set; } = null!;
 
+        [Entity("id", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, IsHidden = true, TriggersMigration = true)]
+        [Attributes.Index(
+            "due_pending",
+            new[] { "\"due_at\"", "\"id\"" },
+            Predicate = "\"completed_at\" IS NULL"
+        )]
+        [Attributes.Index("locked_until", new[] { "\"locked_until\"" })]
+        [Attributes.Index("created_at", new[] { "\"created_at\"" })]
+        public DbSet<OutboxMessage> OutboxMessages { get; set; } = null!;
+
         [Entity("full_name", SaveRestoreKey = "name", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, TriggersMigration = true)]
         [ComputedField("full_name", "schema_id=>__main || '.' || trigger_entity_id=>__main || '.' || name")]
         [UniqueConstraint("name", new[] { "schema_id", "trigger_entity_id", "name" }, IsAlternateKey = true)]
@@ -304,6 +314,7 @@ namespace OzmaDBSchema.System
         public List<Module>? Modules { get; set; }
         public List<Action>? Actions { get; set; }
         public List<ActionSchedule>? ActionSchedules { get; set; }
+        public List<OutboxMessage>? OutboxMessages { get; set; }
         public List<Trigger>? Triggers { get; set; }
         public UserViewGenerator? UserViewGenerator { get; set; }
         public List<UserView>? UserViews { get; set; }
@@ -877,6 +888,61 @@ namespace OzmaDBSchema.System
 
         [ColumnField("string")]
         public string? LastError { get; set; }
+    }
+
+    public class OutboxMessage
+    {
+        public int Id { get; set; }
+
+        [ColumnField("reference(public.schemas) on delete set null")]
+        public int? SchemaId { get; set; }
+        public Schema? Schema { get; set; }
+
+        [ColumnField("string", IsImmutable = true, Default = "'POST'")]
+        [Required]
+        public string Method { get; set; } = "POST";
+
+        [ColumnField("string", IsImmutable = true)]
+        [Required]
+        public string Url { get; set; } = null!;
+
+        [ColumnField("json", IsImmutable = true, Default = "{}")]
+        [Column(TypeName = "jsonb")]
+        [Required]
+        public string Headers { get; set; } = "{}";
+
+        [ColumnField("string", IsImmutable = true)]
+        public string? Body { get; set; }
+
+        [ColumnField("int")]
+        public int? TimeoutMs { get; set; }
+
+        [ColumnField("int", Default = "3")]
+        public int MaxRetries { get; set; } = 3;
+
+        [ColumnField("int", Default = "250")]
+        public int RetryBaseDelayMs { get; set; } = 250;
+
+        [ColumnField("datetime", Default = "transaction_timestamp()")]
+        public Instant DueAt { get; set; }
+
+        [ColumnField("datetime")]
+        public Instant? LockedUntil { get; set; }
+
+        [ColumnField("datetime")]
+        public Instant? CompletedAt { get; set; }
+
+        [ColumnField("int", Default = "0")]
+        public int Attempts { get; set; } = 0;
+
+        [ColumnField("int")]
+        public int? LastStatusCode { get; set; }
+
+        [ColumnField("string")]
+        public string? LastError { get; set; }
+
+        [ColumnField("datetime", IsImmutable = true, Default = "transaction_timestamp()")]
+        public Instant CreatedAt { get; set; }
     }
 
     public class User

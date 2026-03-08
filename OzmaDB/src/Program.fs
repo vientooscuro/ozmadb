@@ -47,8 +47,11 @@ open OzmaDB.HTTP.RateLimit
 open OzmaDB.HTTP.Utils
 open OzmaDB.Operations.Preload
 open OzmaDB.API.InstancesCache
+open OzmaDB.API.JavaScript
 open OzmaDB.EventLogger
 open OzmaDB.TimeTriggersWorker
+open OzmaDB.Outbox.HTTP
+open OzmaDB.OutboxWorker
 
 // Npgsql global type mapping is deprecated, but we are not sure how to make it better now.
 #nowarn "44"
@@ -440,16 +443,83 @@ let private setupInstancesCache (webAppBuilder: WebApplicationBuilder) =
 
     let preload = resolvePreload sourcePreload
 
+    let jsHttpSection = ozmadbSection.GetSection("JavaScript").GetSection("Http")
+    let jsOutboxSection = ozmadbSection.GetSection("JavaScript").GetSection("Outbox")
+
+    let allowedHosts =
+        jsHttpSection.GetSection("AllowedHosts").GetChildren()
+        |> Seq.map (fun c -> c.Value)
+        |> Seq.filter (String.IsNullOrWhiteSpace >> not)
+        |> Seq.toArray
+
+    let jsHttpPolicy =
+        { Enabled = jsHttpSection.GetValue("Enabled", false)
+          AllowedHosts = allowedHosts
+          DefaultTimeoutMs = jsHttpSection.GetValue("DefaultTimeoutMs", 5000)
+          MaxTimeoutMs = jsHttpSection.GetValue("MaxTimeoutMs", 15000)
+          MaxRetries = jsHttpSection.GetValue("MaxRetries", 2)
+          RetryBaseDelayMs = jsHttpSection.GetValue("RetryBaseDelayMs", 200)
+          UserAgent = jsHttpSection.GetValue("UserAgent", "ozmadb/0.0") }
+
+    let jsOutboxSettings =
+        { Enabled = jsOutboxSection.GetValue("Enabled", true)
+          DefaultTimeoutMs = jsOutboxSection.GetValue("DefaultTimeoutMs", 5000)
+          MaxTimeoutMs = jsOutboxSection.GetValue("MaxTimeoutMs", 15000)
+          MaxRetries = jsOutboxSection.GetValue("MaxRetries", 5)
+          RetryBaseDelayMs = jsOutboxSection.GetValue("RetryBaseDelayMs", 500)
+          MaxBodyBytes = jsOutboxSection.GetValue("MaxBodyBytes", 256 * 1024) }
+
+    let jsHostSettings =
+        { HttpPolicy = jsHttpPolicy
+          Outbox = jsOutboxSettings }
+
     let makeInstancesStore (sp: IServiceProvider) =
         let cacheParams =
             { Preload = preload
               LoggerFactory = sp.GetRequiredService<ILoggerFactory>()
               EventLogger = sp.GetRequiredService<EventLogger>()
-              AllowAutoMark = ozmadbSection.GetValue("AllowAutoMark", false) }
+              AllowAutoMark = ozmadbSection.GetValue("AllowAutoMark", false)
+              JSHostSettings = jsHostSettings }
 
         InstancesCacheStore cacheParams
 
     ignore <| services.AddSingleton<InstancesCacheStore>(makeInstancesStore)
+
+let private setupOutboxWorker (webAppBuilder: WebApplicationBuilder) =
+    let ozmadbSection = webAppBuilder.Configuration.GetSection("OzmaDB")
+    let jsHttpSection = ozmadbSection.GetSection("JavaScript").GetSection("Http")
+    let outboxWorkerSection = ozmadbSection.GetSection("OutboxWorker")
+    let services = webAppBuilder.Services
+
+    let allowedHosts =
+        jsHttpSection.GetSection("AllowedHosts").GetChildren()
+        |> Seq.map (fun c -> c.Value)
+        |> Seq.filter (String.IsNullOrWhiteSpace >> not)
+        |> Seq.toArray
+
+    let policy =
+        { Enabled = jsHttpSection.GetValue("Enabled", false)
+          AllowedHosts = allowedHosts
+          DefaultTimeoutMs = jsHttpSection.GetValue("DefaultTimeoutMs", 5000)
+          MaxTimeoutMs = jsHttpSection.GetValue("MaxTimeoutMs", 15000)
+          MaxRetries = jsHttpSection.GetValue("MaxRetries", 2)
+          RetryBaseDelayMs = jsHttpSection.GetValue("RetryBaseDelayMs", 200)
+          UserAgent = jsHttpSection.GetValue("UserAgent", "ozmadb/0.0") }
+
+    let settings =
+        { PollDelayMs = outboxWorkerSection.GetValue("PollDelayMs", defaultOutboxWorkerSettings.PollDelayMs)
+          MaxBatchPerConnection =
+            outboxWorkerSection.GetValue(
+                "MaxBatchPerConnection",
+                defaultOutboxWorkerSettings.MaxBatchPerConnection
+            ) }
+
+    ignore
+    <| services.AddHostedService(fun sp ->
+        let loggerFactory = sp.GetRequiredService<ILoggerFactory>()
+        let instancesCache = sp.GetRequiredService<InstancesCacheStore>()
+        let instancesSource = sp.GetRequiredService<IInstancesSource>()
+        new OutboxWorker(loggerFactory, instancesCache, instancesSource, policy, settings))
 
 let private setupTimeTriggersWorker (webAppBuilder: WebApplicationBuilder) =
     let services = webAppBuilder.Services
@@ -608,6 +678,7 @@ let main (args: string[]) : int =
             setupTimeTriggersWorker webAppBuilder
             setupInstancesSource webAppBuilder
             setupHttpUtils webAppBuilder
+            setupOutboxWorker webAppBuilder
 
             let app = webAppBuilder.Build()
             setupApp app

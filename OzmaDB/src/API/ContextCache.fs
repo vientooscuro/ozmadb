@@ -132,7 +132,8 @@ type ContextCacheParams =
       AllowAutoMark: bool
       Preload: HashedPreload
       ConnectionString: string
-      EventLogger: EventLogger }
+      EventLogger: EventLogger
+      JSHostSettings: JSHostSettings }
 
 type ContextCacheStore(cacheParams: ContextCacheParams) =
     let preload = cacheParams.Preload.Preload
@@ -302,7 +303,7 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
                 { Files = files
                   SearchPath = seq { moduleDirectory } }
 
-            OzmaJSEngine(runtime, env))
+            OzmaJSEngine(runtime, env, cacheParams.JSHostSettings))
 
     let rec finishColdRebuild
         (transaction: DatabaseTransaction)
