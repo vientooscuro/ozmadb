@@ -7,7 +7,6 @@ open System.Linq
 open FSharpPlus
 open Microsoft.Extensions.Logging
 open Microsoft.EntityFrameworkCore
-open Newtonsoft.Json
 
 open OzmaDB.OzmaUtils
 open OzmaDB.Exception
@@ -25,16 +24,15 @@ open OzmaDB.Operations.Entity
 open OzmaDB.Operations.Command
 open OzmaDB.API.Types
 
-let private insertEntryComments (ref: ResolvedEntityRef) (role: RoleType) (arguments: LocalArgumentsMap) =
+let private insertEntryComments (ref: ResolvedEntityRef) (role: RoleType) (_arguments: LocalArgumentsMap) =
     let refStr = sprintf "insert into %O" ref
-    let argumentsStr = sprintf ", arguments %s" (JsonConvert.SerializeObject arguments)
 
     let roleStr =
         match role with
         | RTRoot -> ""
         | RTRole role -> sprintf ", role %O" role.Ref
 
-    String.concat "" [ refStr; argumentsStr; roleStr ]
+    String.concat "" [ refStr; roleStr ]
 
 let private massInsertEntryComments (ref: ResolvedEntityRef) (role: RoleType) =
     let refStr = sprintf "mass insert into %O" ref
@@ -46,16 +44,15 @@ let private massInsertEntryComments (ref: ResolvedEntityRef) (role: RoleType) =
 
     String.concat "" [ refStr; roleStr ]
 
-let private updateEntryComments (ref: ResolvedEntityRef) (role: RoleType) (key: RowKey) (arguments: LocalArgumentsMap) =
+let private updateEntryComments (ref: ResolvedEntityRef) (role: RoleType) (key: RowKey) (_arguments: LocalArgumentsMap) =
     let refStr = sprintf "update %O, id %O" ref key
-    let argumentsStr = sprintf ", arguments %s" (JsonConvert.SerializeObject arguments)
 
     let roleStr =
         match role with
         | RTRoot -> ""
         | RTRole role -> sprintf ", role %O" role.Ref
 
-    String.concat "" [ refStr; argumentsStr; roleStr ]
+    String.concat "" [ refStr; roleStr ]
 
 let private deleteEntryComments (ref: ResolvedEntityRef) (role: RoleType) (key: RowKey) =
     let refStr = sprintf "delete from %O, id %O" ref key
@@ -77,8 +74,8 @@ let private getRelatedEntriesComments (ref: ResolvedEntityRef) (role: RoleType) 
 
     String.concat "" [ refStr; roleStr ]
 
-let private commandComments (source: string) (role: RoleType) (arguments: RawArguments) =
-    let argumentsStr = sprintf ", arguments %s" (JsonConvert.SerializeObject arguments)
+let private commandComments (_source: string) (role: RoleType) (_arguments: RawArguments) =
+    let sourceStr = "run command"
 
     let roleStr =
         match role with
@@ -86,7 +83,7 @@ let private commandComments (source: string) (role: RoleType) (arguments: RawArg
         | RTRole role when role.CanRead -> ""
         | RTRole role -> sprintf ", role %O" role.Ref
 
-    String.concat "" [ source; argumentsStr; roleStr ]
+    String.concat "" [ sourceStr; roleStr ]
 
 type private BeforeTriggerError<'c> =
     | BEError of EntityErrorInfo

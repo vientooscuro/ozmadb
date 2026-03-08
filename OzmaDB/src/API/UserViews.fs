@@ -5,7 +5,6 @@ open System.Linq
 open System.Threading.Tasks
 open Microsoft.Extensions.Logging
 open Microsoft.EntityFrameworkCore
-open Newtonsoft.Json
 
 open OzmaDB.OzmaUtils
 open OzmaDB.Exception
@@ -31,16 +30,13 @@ let private canExplain: RoleType -> bool =
 let private userViewComments
     (source: UserViewSource)
     (role: RoleType)
-    (arguments: ArgumentValuesMap)
-    (chunk: SourceQueryChunk)
+    (_arguments: ArgumentValuesMap)
+    (_chunk: SourceQueryChunk)
     =
     let sourceStr =
         match source with
-        | UVAnonymous q -> sprintf "(%s)" q
+        | UVAnonymous _ -> "anonymous view"
         | UVNamed ref -> ref.ToOzmaQLString()
-
-    let argumentsStr = sprintf ", arguments %s" (JsonConvert.SerializeObject arguments)
-    let chunkStr = sprintf ", chunk %s" (JsonConvert.SerializeObject chunk)
 
     let roleStr =
         match role with
@@ -48,7 +44,7 @@ let private userViewComments
         | RTRole role when role.CanRead -> ""
         | RTRole role -> sprintf ", role %O" role.Ref
 
-    String.concat "" [ sourceStr; argumentsStr; chunkStr; roleStr ]
+    String.concat "" [ sourceStr; roleStr ]
 
 let private removeColumnAttributes (col: UserViewColumn) =
     { col with

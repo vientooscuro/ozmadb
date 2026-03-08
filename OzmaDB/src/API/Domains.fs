@@ -2,7 +2,6 @@ module OzmaDB.API.Domains
 
 open Microsoft.Extensions.Logging
 open System.Threading.Tasks
-open Newtonsoft.Json
 
 open OzmaDB.OzmaUtils
 open OzmaDB.Exception
@@ -18,19 +17,11 @@ module SQL = OzmaDB.SQL.Query
 let private domainComments
     (ref: ResolvedFieldRef)
     (role: RoleType)
-    (rowId: RawRowKey option)
-    (argValues: LocalArgumentsMap)
-    (chunk: SourceQueryChunk)
+    (_rowId: RawRowKey option)
+    (_argValues: LocalArgumentsMap)
+    (_chunk: SourceQueryChunk)
     =
     let refStr = sprintf "domain for %O" ref
-
-    let rowIdStr =
-        match rowId with
-        | None -> ""
-        | Some id -> sprintf ", row id %s" (JsonConvert.SerializeObject id)
-
-    let argsStr = sprintf ", args %s" (JsonConvert.SerializeObject argValues)
-    let chunkStr = sprintf ", chunk %s" (JsonConvert.SerializeObject chunk)
 
     let roleStr =
         match role with
@@ -38,7 +29,7 @@ let private domainComments
         | RTRole role when role.CanRead -> ""
         | RTRole role -> sprintf ", role %O" role.Ref
 
-    String.concat "" [ refStr; rowIdStr; argsStr; chunkStr; roleStr ]
+    String.concat "" [ refStr; roleStr ]
 
 let private canExplain: RoleType -> bool =
     function
