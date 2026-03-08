@@ -941,7 +941,7 @@ namespace OzmaDBSchema.System
         [ColumnField("string")]
         public string? LastError { get; set; }
 
-        [ColumnField("datetime", IsImmutable = true, Default = "transaction_timestamp()")]
+        [ColumnField("datetime", IsImmutable = true)]
         public Instant CreatedAt { get; set; }
     }
 

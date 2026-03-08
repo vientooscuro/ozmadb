@@ -690,6 +690,8 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
                     SystemClock.Instance.GetCurrentInstant()
                     + Duration.FromMilliseconds(float delayMs)
 
+                let createdAt = SystemClock.Instance.GetCurrentInstant()
+
                 let schemaId = this.GetCurrentSchemaId()
                 let handle = this.GetHandle()
                 let tx = handle.API.Request.Context.Transaction
@@ -708,6 +710,7 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
                 outbox.MaxRetries <- maxRetries
                 outbox.RetryBaseDelayMs <- retryBaseDelayMs
                 outbox.DueAt <- dueAt
+                outbox.CreatedAt <- createdAt
                 outbox.Attempts <- 0
 
                 ignore <| tx.System.OutboxMessages.Add(outbox)
