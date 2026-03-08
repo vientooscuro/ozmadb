@@ -189,13 +189,16 @@ let private generateSeriesSignatures: FunctionSignaturesMap =
           ([ STDecimal; STDecimal; STDecimal ], STDecimal)
           ([ STDateTime; STDateTime; STInterval ], STDateTime) ]
 
+let private roundSignatures: FunctionSignaturesMap =
+    funScalarsToSignatures [ ([ STInt ], STInt); ([ STDecimal ], STDecimal); ([ STDecimal; STInt ], STDecimal) ]
+
 let sqlKnownFunctions: Map<FunctionName, FunctionSignaturesMap> =
     Map.ofList
         [ // Common
           (SQLName "to_char", toCharSignatures)
           // Numbers
           (SQLName "abs", funScalarIdSignatures [ STInt; STDecimal ])
-          (SQLName "round", funScalarIdSignatures [ STInt; STDecimal ])
+          (SQLName "round", roundSignatures)
           (SQLName "trunc", funScalarIdSignatures [ STInt; STDecimal ])
           (SQLName "ceil", funScalarIdSignatures [ STInt; STDecimal ])
           // Strings
