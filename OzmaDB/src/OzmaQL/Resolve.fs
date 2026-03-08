@@ -2393,12 +2393,88 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
           Entity = resolvedRef
           Id = fromEntityId }
 
-    let rec resolveResult (flags: SelectFlags) (ctx: Context) : ParsedQueryResult -> ResultInfo * ResolvedQueryResult =
+    let isWildcardInternalField (name: FieldName) = name = funMain
+
+    let matchesWildcardAlias (alias: EntityRef) (entity: EntityRef) =
+        alias.Name = entity.Name
+        &&
+        match alias.Schema with
+        | None -> true
+        | Some aliasSchema -> Some aliasSchema = entity.Schema
+
+    let wildcardFieldRefs (ctx: Context) (mAlias: EntityRef option) : FieldRef[] =
+        let mkInfo entityId entityRef fieldName =
+            {| EntityId = entityId
+               EntityRef = entityRef
+               FieldName = fieldName |}
+
+        let isAllowedEntity =
+            match mAlias with
+            | None -> (fun (_: EntityRef) -> true)
+            | Some alias -> matchesWildcardAlias alias
+
+        let canUseField (info: {| EntityId: FromEntityId; EntityRef: EntityRef option; FieldName: FieldName |}) =
+            Set.contains info.EntityId ctx.LocalEntities
+            && not (isWildcardInternalField info.FieldName)
+            &&
+            match info.EntityRef with
+            | None -> false
+            | Some entity -> isAllowedEntity entity
+
+        let wildcardInfoSeq =
+            ctx.FieldMaps
+            |> Seq.collect Map.toSeq
+            |> Seq.choose (function
+                | ({ Name = fieldName }, FVResolved info) ->
+                    Some(mkInfo info.EntityId info.Entity fieldName)
+                | (_, FVAmbiguous _) -> None)
+            |> Seq.filter canUseField
+            |> Seq.distinctBy (fun info -> (info.EntityId, info.FieldName))
+            |> Seq.sortBy (fun info -> (info.EntityId, string info.FieldName))
+            |> Seq.toArray
+
+        if Array.isEmpty wildcardInfoSeq then
+            match mAlias with
+            | Some alias -> raisef QueryResolveException "Unknown entity in wildcard SELECT: %O" alias
+            | None -> raisef QueryResolveException "Wildcard SELECT requires FROM clause"
+
+        wildcardInfoSeq
+        |> Array.map (fun info ->
+            { Entity = info.EntityRef
+              Name = info.FieldName }
+            : FieldRef)
+
+    let makeWildcardResult (fieldRef: FieldRef) : ParsedQueryResult =
+        let linkedRef =
+            { Ref = VRColumn fieldRef
+              Path = [||]
+              AsRoot = false }
+            : LinkedFieldRef
+
+        let result =
+            { Alias = None
+              Attributes = Map.empty
+              Result = FERef linkedRef }
+            : ParsedQueryColumnResult
+
+        QRExpr result
+
+    let rec resolveResult
+        (flags: SelectFlags)
+        (ctx: Context)
+        : ParsedQueryResult -> (ResultInfo * ResolvedQueryResult)[] =
         function
-        | QRAll alias -> raisef QueryResolveException "Wildcard SELECTs are not yet supported"
+        | QRAll alias ->
+            wildcardFieldRefs ctx alias
+            |> Array.map makeWildcardResult
+            |> Array.map (function
+                | QRExpr result ->
+                    let (exprInfo, newResult) = resolveResultColumn flags ctx result
+                    (exprInfo, QRExpr newResult)
+                | QRAll _ -> failwith "Impossible QRAll")
         | QRExpr result ->
             let (exprInfo, newResult) = resolveResultColumn flags ctx result
-            (exprInfo, QRExpr newResult)
+            [| (exprInfo, QRExpr newResult) |]
 
     and resolveResultColumn
         (flags: SelectFlags)
@@ -3228,7 +3304,7 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
         let (orderLimitInfo, orderLimit) = resolveOrderLimitClause ctx query.OrderLimit
         exprInfo <- unionSubqueryExprInfo exprInfo (resolvedToSubqueryExprInfo orderLimitInfo)
 
-        let rawResults = Array.map (resolveResult flags ctx) query.Results
+        let rawResults = query.Results |> Array.collect (resolveResult flags ctx)
 
         let hasAggregates =
             Array.exists (fun (info: ResultInfo, expr) -> info.ExprInfo.Flags.HasAggregates) rawResults
