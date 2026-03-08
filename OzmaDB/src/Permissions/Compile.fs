@@ -15,6 +15,10 @@ type CompiledRestriction =
       Joins: JoinPaths
       Where: SQL.ValueExpr }
 
+type DMLRestriction =
+    { From: SQL.FromExpr option
+      Where: SQL.ValueExpr }
+
 let private defaultWhere: SQL.ValueExpr = SQL.VEValue(SQL.VBool true)
 
 let private restrictionJoinNamespace = OzmaQLName "restr"
@@ -57,41 +61,30 @@ let restrictionToSelect (ref: ResolvedEntityRef) (restr: CompiledRestriction) : 
       Tree = SQL.SSelect select
       Extra = null }
 
-// TODO: This can be improved: instead of sub-SELECT we could merge the restriction and add FROM entries to UPDATE or DELETE,
-// just like we already do with `IsInner` SELECTs.
-let restrictionToValueExpr
+let restrictionToDMLExpr
     (entityRef: ResolvedEntityRef)
     (newTableName: SQL.TableName)
     (restr: CompiledRestriction)
-    : SQL.ValueExpr =
+    : DMLRestriction =
+    let opIdColumn =
+        SQL.VEColumn
+            { Table = Some { Schema = None; Name = newTableName }
+              Name = sqlFunId }
+
+    let restrIdColumn =
+        SQL.VEColumn
+            { Table = Some restrictedTableRef
+              Name = sqlFunId }
+
+    // Keep restriction as plain WHERE when FROM is a single table. This avoids an unnecessary self-join.
     match restr.From with
     | SQL.FTable table ->
-        // We can make expression simpler in this case, just using `WHERE`.
-        // `(table.Extra :?> RealEntityAnnotation).RealEntity` is always `rootRef` here, see above.
         let renamesMap = Map.singleton (fromTableName table) newTableName
-        SQL.naiveRenameTablesExpr renamesMap restr.Where
+
+        { From = None
+          Where = SQL.naiveRenameTablesExpr renamesMap restr.Where }
     | _ ->
-        let select =
-            { SQL.emptySingleSelectExpr with
-                Columns =
-                    [| SQL.SCExpr(
-                           None,
-                           SQL.VEColumn
-                               { Table = Some restrictedTableRef
-                                 Name = sqlFunId }
-                       ) |]
-                From = Some restr.From
-                Where = Some restr.Where }
+        let idEq = SQL.VEBinaryOp(opIdColumn, SQL.BOEq, restrIdColumn)
 
-        let subexpr =
-            { CTEs = None
-              Extra = null
-              Tree = SQL.SSelect select }
-            : SQL.SelectExpr
-
-        let idColumn =
-            SQL.VEColumn
-                { Table = Some { Schema = None; Name = newTableName }
-                  Name = sqlFunId }
-
-        SQL.VEInQuery(idColumn, subexpr)
+        { From = Some restr.From
+          Where = SQL.VEAnd(restr.Where, idEq) }

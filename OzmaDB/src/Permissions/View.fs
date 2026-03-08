@@ -42,9 +42,9 @@ type private PermissionsApplier
 
     and getSelectRestriction = memoizeN buildSelectRestriction
 
-    let getUpdateValueRestriction entityRef newTableName =
+    let getUpdateRestriction entityRef newTableName =
         buildSelectUpdateRestriction entityRef
-        |> Option.map (restrictionToValueExpr entityRef newTableName)
+        |> Option.map (restrictionToDMLExpr entityRef newTableName)
 
     let rec buildDeleteRestriction entityRef =
         let filter = Map.find entityRef allowedDatabase
@@ -56,9 +56,23 @@ type private PermissionsApplier
 
     and getDeleteRestriction = memoizeN buildDeleteRestriction
 
-    let getDeleteValueRestriction entityRef newTableName =
+    let getDeleteRestrictionDML entityRef newTableName =
         getDeleteRestriction entityRef
-        |> Option.map (restrictionToValueExpr entityRef newTableName)
+        |> Option.map (restrictionToDMLExpr entityRef newTableName)
+
+    let appendFromExpr (oldFrom: FromExpr option) (newFrom: FromExpr option) =
+        match newFrom with
+        | None -> oldFrom
+        | Some newFrom ->
+            match oldFrom with
+            | None -> Some newFrom
+            | Some oldFrom ->
+                Some
+                    <| FJoin
+                        { Type = Cross
+                          A = oldFrom
+                          B = newFrom
+                          Condition = None }
 
     let rec applyToSelectTreeExpr: SelectTreeExpr -> SelectTreeExpr =
         function
@@ -258,11 +272,11 @@ type private PermissionsApplier
           Extra = query.Extra }
 
     and applyToUpdateExpr (query: UpdateExpr) : UpdateExpr =
-        let newWhere =
+        let newRestriction =
             match query.Table.Extra with
             | :? RealEntityAnnotation as tableInfo ->
                 let newTableName = (operationTableRef query.Table).Name
-                getUpdateValueRestriction tableInfo.RealEntity newTableName
+                getUpdateRestriction tableInfo.RealEntity newTableName
             | :? NoEntityAnnotation -> None
             | _ -> failwith "Entity annotation is required"
 
@@ -272,22 +286,24 @@ type private PermissionsApplier
             | _ -> query.Where
 
         let oldWhere = Option.map applyToValueExpr oldWhere
+        let newWhere = Option.map (fun restr -> restr.Where) newRestriction
         let where = Option.unionWith (curry VEAnd) oldWhere newWhere
+        let from = appendFromExpr (Option.map applyToFromExpr query.From) (Option.bind (fun r -> r.From) newRestriction)
 
         { CTEs = Option.map applyToCommonTableExprs query.CTEs
           Table = query.Table
           Assignments = Array.map applyToUpdateAssignExpr query.Assignments
-          From = Option.map applyToFromExpr query.From
+          From = from
           Where = where
           Returning = query.Returning
           Extra = query.Extra }
 
     and applyToDeleteExpr (query: DeleteExpr) : DeleteExpr =
-        let newWhere =
+        let newRestriction =
             match query.Table.Extra with
             | :? RealEntityAnnotation as tableInfo ->
                 let newTableName = (operationTableRef query.Table).Name
-                getDeleteValueRestriction tableInfo.RealEntity newTableName
+                getDeleteRestrictionDML tableInfo.RealEntity newTableName
             | :? NoEntityAnnotation -> None
             | _ -> failwith "Entity annotation is required"
 
@@ -297,11 +313,13 @@ type private PermissionsApplier
             | _ -> query.Where
 
         let oldWhere = Option.map applyToValueExpr oldWhere
+        let newWhere = Option.map (fun restr -> restr.Where) newRestriction
         let where = Option.unionWith (curry VEAnd) oldWhere newWhere
+        let using = appendFromExpr (Option.map applyToFromExpr query.Using) (Option.bind (fun r -> r.From) newRestriction)
 
         { CTEs = Option.map applyToCommonTableExprs query.CTEs
           Table = query.Table
-          Using = Option.map applyToFromExpr query.Using
+          Using = using
           Where = where
           Returning = query.Returning
           Extra = query.Extra }
