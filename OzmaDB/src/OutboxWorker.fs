@@ -138,13 +138,7 @@ type OutboxWorker
                             response.Status
                         )
                     | Error err ->
-                        do!
-                            failClaimedOutboxMessage
-                                ctx.Transaction.Connection.Query
-                                claimed
-                                None
-                                err
-                                cancellationToken
+                        do! failClaimedOutboxMessage ctx.Transaction.Connection.Query claimed None err cancellationToken
 
                         logger.LogWarning("Outbox delivery error for message {id}: {error}", claimed.Id, err)
 

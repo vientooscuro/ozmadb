@@ -27,8 +27,7 @@ type ClaimedOutboxMessage =
 let private outboxTableName = "public.outbox_messages"
 
 let private parseHeaders (raw: string) : Map<string, string> =
-    let parsed =
-        Newtonsoft.Json.JsonConvert.DeserializeObject<Map<string, string>>(raw)
+    let parsed = Newtonsoft.Json.JsonConvert.DeserializeObject<Map<string, string>>(raw)
 
     if isRefNull parsed then Map.empty else parsed
 
@@ -63,7 +62,7 @@ let private parseClaimedOutboxMessage (row: (SQL.SQLName * SQL.SimpleValueType *
         match get idx with
         | SQL.VJson j ->
             match j.Json with
-            | :? Newtonsoft.Json.Linq.JObject as obj -> parseHeaders(obj.ToString(Newtonsoft.Json.Formatting.None))
+            | :? Newtonsoft.Json.Linq.JObject as obj -> parseHeaders (obj.ToString(Newtonsoft.Json.Formatting.None))
             | _ -> Map.empty
         | SQL.VNull -> Map.empty
         | v -> failwithf "Invalid outbox headers value: %O" v
@@ -161,7 +160,9 @@ let failClaimedOutboxMessage
             else error.Substring(0, maxErrorLength)
 
         let attemptsExceeded = message.Attempts > message.MaxRetries
-        let retrySeconds = min 300 (max 5 ((max 1 message.RetryBaseDelayMs) * (pown 2 (message.Attempts - 1)) / 1000))
+
+        let retrySeconds =
+            min 300 (max 5 ((max 1 message.RetryBaseDelayMs) * (pown 2 (message.Attempts - 1)) / 1000))
 
         let statusCodeSql =
             match statusCode with

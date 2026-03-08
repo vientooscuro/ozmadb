@@ -374,7 +374,7 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
     member private this.ClampOrDefault (value: int option) (defaultValue: int) (minValue: int) (maxValue: int) =
         value |> Option.defaultValue defaultValue |> min maxValue |> max minValue
 
-    member private this.HeadersMap (headers: JObject option) : Map<string, string> =
+    member private this.HeadersMap(headers: JObject option) : Map<string, string> =
         match headers with
         | None -> Map.empty
         | Some raw ->
@@ -385,7 +385,10 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
                 | _ -> None)
             |> Map.ofSeq
 
-    member private this.WithSerializedBody (headers: Map<string, string>) (body: JToken option) : Map<string, string> * string option =
+    member private this.WithSerializedBody
+        (headers: Map<string, string>)
+        (body: JToken option)
+        : Map<string, string> * string option =
         match body with
         | None -> (headers, None)
         | Some token when token.Type = JTokenType.Null -> (headers, None)
@@ -395,10 +398,14 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
         | Some token ->
             let hasContentType =
                 headers
-                |> Seq.exists (fun (KeyValue(k, _)) -> String.Equals(k, "content-type", StringComparison.OrdinalIgnoreCase))
+                |> Seq.exists (fun (KeyValue(k, _)) ->
+                    String.Equals(k, "content-type", StringComparison.OrdinalIgnoreCase))
 
             let headers =
-                if hasContentType then headers else Map.add "content-type" "application/json" headers
+                if hasContentType then
+                    headers
+                else
+                    Map.add "content-type" "application/json" headers
 
             let txt = JsonConvert.SerializeObject(token, Formatting.None)
             (headers, Some txt)
@@ -610,8 +617,11 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
                 let timeoutMs =
                     this.ClampOrDefault req.TimeoutMs httpPolicy.DefaultTimeoutMs 1 httpPolicy.MaxTimeoutMs
 
-                let retries = this.ClampOrDefault req.Retries httpPolicy.MaxRetries 0 httpPolicy.MaxRetries
-                let retryBaseDelayMs = this.ClampOrDefault req.RetryBaseDelayMs httpPolicy.RetryBaseDelayMs 1 30000
+                let retries =
+                    this.ClampOrDefault req.Retries httpPolicy.MaxRetries 0 httpPolicy.MaxRetries
+
+                let retryBaseDelayMs =
+                    this.ClampOrDefault req.RetryBaseDelayMs httpPolicy.RetryBaseDelayMs 1 30000
 
                 let method =
                     req.Method
@@ -676,7 +686,9 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
 
                 let dueAt =
                     let delayMs = req.DelayMs |> Option.defaultValue 0 |> max 0
-                    SystemClock.Instance.GetCurrentInstant() + Duration.FromMilliseconds(float delayMs)
+
+                    SystemClock.Instance.GetCurrentInstant()
+                    + Duration.FromMilliseconds(float delayMs)
 
                 let schemaId = this.GetCurrentSchemaId()
                 let handle = this.GetHandle()

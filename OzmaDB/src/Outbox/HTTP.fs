@@ -43,8 +43,7 @@ type HttpDispatchResponse =
       Headers: Map<string, string[]>
       Body: string }
 
-let private normalizeHostPattern (pattern: string) =
-    pattern.Trim().ToLowerInvariant()
+let private normalizeHostPattern (pattern: string) = pattern.Trim().ToLowerInvariant()
 
 let normalizePolicy (policy: OutboundHttpPolicy) =
     { policy with
@@ -102,6 +101,7 @@ let private client =
     lazy
         (let handler = new SocketsHttpHandler()
          handler.AllowAutoRedirect <- false
+
          handler.AutomaticDecompression <-
              System.Net.DecompressionMethods.GZip
              ||| System.Net.DecompressionMethods.Deflate
@@ -117,11 +117,10 @@ let private setHeaders (msg: HttpRequestMessage) (headers: Map<string, string>) 
             | content ->
                 content.Headers.Remove("Content-Type") |> ignore
                 content.Headers.TryAddWithoutValidation(k, v) |> ignore
-        else
-            if not <| msg.Headers.TryAddWithoutValidation(k, v) then
-                match msg.Content with
-                | null -> ()
-                | content -> content.Headers.TryAddWithoutValidation(k, v) |> ignore
+        else if not <| msg.Headers.TryAddWithoutValidation(k, v) then
+            match msg.Content with
+            | null -> ()
+            | content -> content.Headers.TryAddWithoutValidation(k, v) |> ignore
 
 let dispatchHttp
     (policy: OutboundHttpPolicy)
@@ -139,8 +138,18 @@ let dispatchHttp
             | Ok uri -> uri
             | Error err -> failwith err
 
-        let timeoutMs = req.TimeoutMs |> Option.defaultValue policy.DefaultTimeoutMs |> min policy.MaxTimeoutMs |> max 1
-        let retries = req.Retries |> Option.defaultValue policy.MaxRetries |> min policy.MaxRetries |> max 0
+        let timeoutMs =
+            req.TimeoutMs
+            |> Option.defaultValue policy.DefaultTimeoutMs
+            |> min policy.MaxTimeoutMs
+            |> max 1
+
+        let retries =
+            req.Retries
+            |> Option.defaultValue policy.MaxRetries
+            |> min policy.MaxRetries
+            |> max 0
+
         let retryBaseDelayMs =
             req.RetryBaseDelayMs |> Option.defaultValue policy.RetryBaseDelayMs |> max 1
 
@@ -154,7 +163,9 @@ let dispatchHttp
         let mutable lastResponse = None: HttpDispatchResponse option
         let mutable shouldContinue = true
 
-        while shouldContinue && attempt <= retries && not cancellationToken.IsCancellationRequested do
+        while shouldContinue
+              && attempt <= retries
+              && not cancellationToken.IsCancellationRequested do
             use requestMessage = new HttpRequestMessage(HttpMethod(methodStr), uri)
 
             match req.Body with
@@ -168,7 +179,9 @@ let dispatchHttp
                 use timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
                 timeoutCts.CancelAfter(timeoutMs)
 
-                use! response = client.Value.SendAsync(requestMessage, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token)
+                use! response =
+                    client.Value.SendAsync(requestMessage, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token)
+
                 let! body = response.Content.ReadAsStringAsync(timeoutCts.Token)
 
                 let parsedResponse =

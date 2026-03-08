@@ -509,10 +509,7 @@ let private setupOutboxWorker (webAppBuilder: WebApplicationBuilder) =
     let settings =
         { PollDelayMs = outboxWorkerSection.GetValue("PollDelayMs", defaultOutboxWorkerSettings.PollDelayMs)
           MaxBatchPerConnection =
-            outboxWorkerSection.GetValue(
-                "MaxBatchPerConnection",
-                defaultOutboxWorkerSettings.MaxBatchPerConnection
-            ) }
+            outboxWorkerSection.GetValue("MaxBatchPerConnection", defaultOutboxWorkerSettings.MaxBatchPerConnection) }
 
     ignore
     <| services.AddHostedService(fun sp ->
