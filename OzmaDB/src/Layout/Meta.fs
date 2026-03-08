@@ -525,15 +525,12 @@ type private MetaBuilder(layout: Layout) =
                 None
             else
                 match entity.FindField entity.MainField with
-                | Some
-                    { Field = RColumnField field
-                      Name = _ } when
-                    Option.isNone field.InheritedFrom
-                    && field.ValueType = SQL.VTScalar SQL.STString ->
+                | Some { Field = RColumnField field; Name = _ } when
+                    Option.isNone field.InheritedFrom && field.ValueType = SQL.VTScalar SQL.STString
+                    ->
                     let key = sprintf "__mainsearch__%O__%O" entityRef.Schema entityRef.Name
 
-                    let sqlName =
-                        SQL.SQLName <| sprintf "__mainsearch__%s" entity.HashName
+                    let sqlName = SQL.SQLName <| sprintf "__mainsearch__%s" entity.HashName
 
                     let mainSearchIndex =
                         { Columns =

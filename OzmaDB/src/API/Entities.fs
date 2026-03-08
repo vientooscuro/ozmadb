@@ -44,7 +44,12 @@ let private massInsertEntryComments (ref: ResolvedEntityRef) (role: RoleType) =
 
     String.concat "" [ refStr; roleStr ]
 
-let private updateEntryComments (ref: ResolvedEntityRef) (role: RoleType) (key: RowKey) (_arguments: LocalArgumentsMap) =
+let private updateEntryComments
+    (ref: ResolvedEntityRef)
+    (role: RoleType)
+    (key: RowKey)
+    (_arguments: LocalArgumentsMap)
+    =
     let refStr = sprintf "update %O, id %O" ref key
 
     let roleStr =

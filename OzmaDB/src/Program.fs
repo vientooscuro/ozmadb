@@ -106,7 +106,10 @@ type private DatabaseInstances
                     let! result =
                         readOnlyInstances.Instances
                             .AsNoTracking()
-                            .FirstOrDefaultAsync((fun x -> x.Name.ToLower() = lowerHost && x.Enabled), cancellationToken)
+                            .FirstOrDefaultAsync(
+                                (fun x -> x.Name.ToLower() = lowerHost && x.Enabled),
+                                cancellationToken
+                            )
 
                     do! readOnlyInstances.DisposeAsync()
 

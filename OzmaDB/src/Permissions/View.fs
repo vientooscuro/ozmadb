@@ -68,11 +68,11 @@ type private PermissionsApplier
             | None -> Some newFrom
             | Some oldFrom ->
                 Some
-                    <| FJoin
-                        { Type = Cross
-                          A = oldFrom
-                          B = newFrom
-                          Condition = None }
+                <| FJoin
+                    { Type = Cross
+                      A = oldFrom
+                      B = newFrom
+                      Condition = None }
 
     let rec applyToSelectTreeExpr: SelectTreeExpr -> SelectTreeExpr =
         function
@@ -288,7 +288,9 @@ type private PermissionsApplier
         let oldWhere = Option.map applyToValueExpr oldWhere
         let newWhere = Option.map (fun restr -> restr.Where) newRestriction
         let where = Option.unionWith (curry VEAnd) oldWhere newWhere
-        let from = appendFromExpr (Option.map applyToFromExpr query.From) (Option.bind (fun r -> r.From) newRestriction)
+
+        let from =
+            appendFromExpr (Option.map applyToFromExpr query.From) (Option.bind (fun r -> r.From) newRestriction)
 
         { CTEs = Option.map applyToCommonTableExprs query.CTEs
           Table = query.Table
@@ -315,7 +317,9 @@ type private PermissionsApplier
         let oldWhere = Option.map applyToValueExpr oldWhere
         let newWhere = Option.map (fun restr -> restr.Where) newRestriction
         let where = Option.unionWith (curry VEAnd) oldWhere newWhere
-        let using = appendFromExpr (Option.map applyToFromExpr query.Using) (Option.bind (fun r -> r.From) newRestriction)
+
+        let using =
+            appendFromExpr (Option.map applyToFromExpr query.Using) (Option.bind (fun r -> r.From) newRestriction)
 
         { CTEs = Option.map applyToCommonTableExprs query.CTEs
           Table = query.Table
