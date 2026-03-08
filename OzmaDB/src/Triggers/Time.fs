@@ -68,7 +68,9 @@ let private enqueueSingleField
     (cancellationToken: CancellationToken)
     : Task =
     task {
-        if not <| Array.isEmpty triggers then
+        if Array.isEmpty triggers then
+            return ()
+        else
             let rootTable: SQL.TableRef =
                 { Schema = Some(SQL.SQLName(string rootEntity.Schema))
                   Name = SQL.SQLName(string rootEntity.Name) }
