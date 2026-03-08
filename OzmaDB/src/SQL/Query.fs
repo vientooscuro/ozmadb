@@ -196,7 +196,7 @@ type QueryConnection(loggerFactory: ILoggerFactory, connection: NpgsqlConnection
                 | (None, obj) -> ignore <| command.Parameters.AddWithValue(name.ToString(), obj)
                 | (Some typ, obj) -> ignore <| command.Parameters.AddWithValue(name.ToString(), typ, obj)
 
-            logger.LogInformation("Executing query with args {args}: {query}", pars, queryStr)
+            logger.LogDebug("Executing query with args {args}: {query}", pars, queryStr)
 
             try
                 return! runFunc command
