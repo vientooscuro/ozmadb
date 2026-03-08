@@ -67,10 +67,10 @@ let private enqueueSingleField
     (triggers: MergedTrigger[])
     (cancellationToken: CancellationToken)
     : Task =
-    task {
-        if Array.isEmpty triggers then
-            return ()
-        else
+    if Array.isEmpty triggers then
+        Task.CompletedTask
+    else
+        task {
             let rootTable: SQL.TableRef =
                 { Schema = Some(SQL.SQLName(string rootEntity.Schema))
                   Name = SQL.SQLName(string rootEntity.Name) }
@@ -172,7 +172,7 @@ ON CONFLICT (
 
             let! _ = query.ExecuteNonQuery q Map.empty cancellationToken
             return ()
-    }
+        }
 
 let scheduleRowTimeTriggers
     (query: QueryConnection)
