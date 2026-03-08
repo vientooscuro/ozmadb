@@ -519,9 +519,41 @@ type private MetaBuilder(layout: Layout) =
                 Some(sqlName, (Set.singleton key, refIndex))
             | _ -> None
 
-        let refIndexes = entity.ColumnFields |> Map.toSeq |> Seq.mapMaybe makeReferenceIndex
+        let makeMainSearchIndex () =
+            // Build a trigram GIN index on root main field to accelerate generic text search.
+            if Option.isSome entity.Parent then
+                None
+            else
+                match entity.FindField entity.MainField with
+                | Some
+                    { Field = RColumnField field
+                      Name = _ } when
+                    Option.isNone field.InheritedFrom
+                    && field.ValueType = SQL.VTScalar SQL.STString ->
+                    let key = sprintf "__mainsearch__%O__%O" entityRef.Schema entityRef.Name
 
-        let allCommonIndexes = Seq.concat [ indexes; refIndexes ]
+                    let sqlName =
+                        SQL.SQLName <| sprintf "__mainsearch__%s" entity.HashName
+
+                    let mainSearchIndex =
+                        { Columns =
+                            [| { Key = SQL.IKColumn field.ColumnName
+                                 OpClass = Some(SQL.SQLName "gin_trgm_ops")
+                                 Order = None
+                                 Nulls = None } |]
+                          IncludedColumns = [||]
+                          IsUnique = false
+                          Predicate = None
+                          AccessMethod = SQL.SQLName "gin" }
+                        : SQL.IndexMeta
+
+                    Some(sqlName, (Set.singleton key, mainSearchIndex))
+                | _ -> None
+
+        let refIndexes = entity.ColumnFields |> Map.toSeq |> Seq.mapMaybe makeReferenceIndex
+        let mainSearchIndex = makeMainSearchIndex () |> Option.toSeq
+
+        let allCommonIndexes = Seq.concat [ indexes; refIndexes; mainSearchIndex ]
 
         let commonIndexObjects =
             Seq.map (fun (name, (keys, index)) -> (name, SQL.OMIndex(keys, tableName.Name, index))) allCommonIndexes
