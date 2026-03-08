@@ -79,6 +79,7 @@ type TimeTriggersWorker
                 let _api = OzmaDBAPI(rctx)
 
                 let! maybeClaimedTimeTask = tryClaimDueTimeTrigger ctx.Transaction.Connection.Query cancellationToken
+
                 let! maybeClaimedActionSchedule =
                     match maybeClaimedTimeTask with
                     | Some _ -> Task.result None
@@ -159,7 +160,9 @@ type TimeTriggersWorker
                                     let message = sprintf "Action %O not found" claimedSchedule.Action
                                     return Error message
                                 | Some(Error e) ->
-                                    let message = sprintf "Action %O is broken: %s" claimedSchedule.Action (fullUserMessage e)
+                                    let message =
+                                        sprintf "Action %O is broken: %s" claimedSchedule.Action (fullUserMessage e)
+
                                     return Error message
                                 | Some(Ok action) ->
                                     do!

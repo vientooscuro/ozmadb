@@ -25,7 +25,9 @@ type ClaimedActionSchedule =
 
 let private schedulesTableName = "public.action_schedules"
 
-let private parseClaimedActionSchedule (row: (SQL.SQLName * SQL.SimpleValueType * SQL.Value)[]) : ClaimedActionSchedule =
+let private parseClaimedActionSchedule
+    (row: (SQL.SQLName * SQL.SimpleValueType * SQL.Value)[])
+    : ClaimedActionSchedule =
     let get idx =
         let (_, _, value) = row.[idx]
         value
@@ -161,12 +163,9 @@ let failClaimedActionSchedule
         let maxErrorLength = 3000
 
         let safeError =
-            if String.IsNullOrEmpty(error) then
-                "unknown"
-            elif error.Length <= maxErrorLength then
-                error
-            else
-                error.Substring(0, maxErrorLength)
+            if String.IsNullOrEmpty(error) then "unknown"
+            elif error.Length <= maxErrorLength then error
+            else error.Substring(0, maxErrorLength)
 
         let q =
             sprintf

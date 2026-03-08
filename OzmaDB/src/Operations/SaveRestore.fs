@@ -1494,6 +1494,7 @@ let private prettifyTriggerMeta (trigger: SourceTrigger) : PrettyTriggerMeta =
 
 let private deprettifyTrigger (meta: PrettyTriggerMeta) (procedure: string) : SourceTrigger =
     let onTimeFields = if isNull meta.OnTimeFields then [||] else meta.OnTimeFields
+
     let onTimeOffsetUnit =
         if isNull (box meta.OnTimeOffsetUnit) then
             TTOUMinutes

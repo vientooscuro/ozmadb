@@ -75,7 +75,8 @@ let private enqueueSingleField
 
             let values =
                 triggers
-                |> Seq.map (fun trig -> (triggerRefForEvent eventEntity trig, trig.OnTimeOffsetValue, trig.OnTimeOffsetUnit))
+                |> Seq.map (fun trig ->
+                    (triggerRefForEvent eventEntity trig, trig.OnTimeOffsetValue, trig.OnTimeOffsetUnit))
                 |> Seq.map (fun (triggerRef: TriggerRef, offsetValue: int, offsetUnit: TriggerTimeOffsetUnit) ->
                     sprintf
                         "(%s, %s, %s, %s, %s, %s)"
