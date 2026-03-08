@@ -13,6 +13,8 @@ type MergedTrigger =
     { Schema: SchemaName
       Name: TriggerName
       Priority: int
+      OnTimeOffsetValue: int
+      OnTimeOffsetUnit: TriggerTimeOffsetUnit
       Inherited: ResolvedEntityRef option }
 
 type TriggerUpdateField =
@@ -157,6 +159,8 @@ let private makeOneMergedTriggerEntity
             { Schema = schemaName
               Name = name
               Priority = trigger.Priority
+              OnTimeOffsetValue = trigger.OnTimeOffsetValue
+              OnTimeOffsetUnit = trigger.OnTimeOffsetUnit
               Inherited = None }
 
         let time =

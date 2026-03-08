@@ -14,6 +14,7 @@ open OzmaDB.API.Types
 open OzmaDB.API.Request
 open OzmaDB.API.API
 open OzmaDB.API.InstancesCache
+open OzmaDB.Actions.Schedule
 open OzmaDB.Triggers.Time
 open OzmaDB.HTTP.Utils
 
@@ -77,16 +78,22 @@ type TimeTriggersWorker
                 let! rctx = RequestContext.Create(reqParams)
                 let _api = OzmaDBAPI(rctx)
 
-                match! tryClaimDueTimeTrigger ctx.Transaction.Connection.Query cancellationToken with
-                | None ->
+                let! maybeClaimedTimeTask = tryClaimDueTimeTrigger ctx.Transaction.Connection.Query cancellationToken
+                let! maybeClaimedActionSchedule =
+                    match maybeClaimedTimeTask with
+                    | Some _ -> Task.result None
+                    | None -> tryClaimDueActionSchedule ctx.Transaction.Connection.Query cancellationToken
+
+                match maybeClaimedTimeTask, maybeClaimedActionSchedule with
+                | None, None ->
                     let! commitResult = ctx.Commit()
 
                     match commitResult with
                     | Ok() -> shouldContinue <- false
                     | Error err ->
-                        logger.LogError("Failed to commit empty time-trigger transaction: {error}", err.LogMessage)
+                        logger.LogError("Failed to commit empty scheduler transaction: {error}", err.LogMessage)
                         shouldContinue <- false
-                | Some claimedTask ->
+                | Some claimedTask, _ ->
                     let! runResult =
                         task {
                             try
@@ -105,6 +112,8 @@ type TimeTriggersWorker
                                                         claimedTask.RowId
                                                         claimedTask.FieldName
                                                         claimedTask.DueAt
+                                                        claimedTask.OffsetValue
+                                                        claimedTask.OffsetUnit
                                                         cancellationToken
 
                                                 return ()
@@ -140,6 +149,62 @@ type TimeTriggersWorker
                     | Ok() -> processed <- processed + 1
                     | Error err ->
                         logger.LogError("Failed to commit time-trigger transaction: {error}", err.LogMessage)
+                        shouldContinue <- false
+                | None, Some claimedSchedule ->
+                    let! runResult =
+                        task {
+                            try
+                                match ctx.FindAction claimedSchedule.Action with
+                                | None ->
+                                    let message = sprintf "Action %O not found" claimedSchedule.Action
+                                    return Error message
+                                | Some(Error e) ->
+                                    let message = sprintf "Action %O is broken: %s" claimedSchedule.Action (fullUserMessage e)
+                                    return Error message
+                                | Some(Ok action) ->
+                                    do!
+                                        rctx.RunWithSource(ESAction claimedSchedule.Action)
+                                        <| fun () ->
+                                            task {
+                                                let! _ = action.Run(claimedSchedule.Args, cancellationToken)
+                                                return ()
+                                            }
+
+                                    return Ok()
+                            with e ->
+                                return Error(fullUserMessage e)
+                        }
+
+                    match runResult with
+                    | Ok() ->
+                        do!
+                            completeClaimedActionSchedule
+                                ctx.Transaction.Connection.Query
+                                claimedSchedule.Id
+                                claimedSchedule.DueAt
+                                cancellationToken
+                    | Error err ->
+                        logger.LogError(
+                            "Scheduled action execution failed for {action} (schedule {id}): {error}",
+                            claimedSchedule.Action,
+                            claimedSchedule.Id,
+                            err
+                        )
+
+                        do!
+                            failClaimedActionSchedule
+                                ctx.Transaction.Connection.Query
+                                claimedSchedule.Id
+                                claimedSchedule.Attempts
+                                err
+                                cancellationToken
+
+                    let! commitResult = ctx.Commit()
+
+                    match commitResult with
+                    | Ok() -> processed <- processed + 1
+                    | Error err ->
+                        logger.LogError("Failed to commit action-schedule transaction: {error}", err.LogMessage)
                         shouldContinue <- false
 
             return processed

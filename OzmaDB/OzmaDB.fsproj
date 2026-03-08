@@ -123,6 +123,7 @@
     <Compile Include="src/Actions/Resolve.fs" />
     <Compile Include="src/Actions/Schema.fs" />
     <Compile Include="src/Actions/Run.fs" />
+    <Compile Include="src/Actions/Schedule.fs" />
 
     <Compile Include="src/Triggers/Resolve.fs" />
     <Compile Include="src/Triggers/Run.fs" />

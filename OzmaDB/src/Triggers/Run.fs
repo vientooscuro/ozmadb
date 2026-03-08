@@ -30,7 +30,12 @@ type SerializedTriggerSource =
     | [<CaseKey("insert")>] TSInsert of NewId: int option
     | [<CaseKey("update")>] TSUpdate of Id: int
     | [<CaseKey("delete")>] TSDelete of Id: int option
-    | [<CaseKey("time")>] TSTime of Id: int * Field: FieldName * DueAt: Instant
+    | [<CaseKey("time")>] TSTime of
+        Id: int *
+        Field: FieldName *
+        DueAt: Instant *
+        OffsetValue: int *
+        OffsetUnit: TriggerTimeOffsetUnit
 
 type SerializedTriggerEvent =
     { Entity: ResolvedEntityRef
@@ -170,9 +175,11 @@ type TriggerScript(engine: JSEngine, name: string, scriptSource: string, cancell
         (id: int)
         (fieldName: FieldName)
         (dueAt: Instant)
+        (offsetValue: int)
+        (offsetUnit: TriggerTimeOffsetUnit)
         (cancellationToken: CancellationToken)
         : Task =
-        runAfterTrigger entity (TSTime(id, fieldName, dueAt)) None cancellationToken
+        runAfterTrigger entity (TSTime(id, fieldName, dueAt, offsetValue, offsetUnit)) None cancellationToken
 
     member this.Engine = engine
 

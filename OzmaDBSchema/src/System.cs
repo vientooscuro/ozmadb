@@ -107,6 +107,19 @@ namespace OzmaDBSchema.System
         public DbSet<Action> Actions { get; set; } = null!;
 
         [Entity("full_name", SaveRestoreKey = "name", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, TriggersMigration = true)]
+        [ComputedField("full_name", "schema_id=>__main || '.' || name")]
+        [UniqueConstraint("name", new[] { "schema_id", "name" }, IsAlternateKey = true)]
+        [CheckConstraint("hour_range", "hour >= 0 AND hour < 24")]
+        [CheckConstraint("minute_range", "minute >= 0 AND minute < 60")]
+        [CheckConstraint(
+            "schedule_mode_valid",
+            "(schedule_type = 'DAILY' AND run_at IS NULL) OR (schedule_type = 'ONCE' AND run_at IS NOT NULL)"
+        )]
+        [Attributes.Index("locked_until", new[] { "\"locked_until\"" })]
+        [Attributes.Index("action_name", new[] { "\"schema_id\"", "\"action_name\"" })]
+        public DbSet<ActionSchedule> ActionSchedules { get; set; } = null!;
+
+        [Entity("full_name", SaveRestoreKey = "name", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, TriggersMigration = true)]
         [ComputedField("full_name", "schema_id=>__main || '.' || trigger_entity_id=>__main || '.' || name")]
         [UniqueConstraint("name", new[] { "schema_id", "trigger_entity_id", "name" }, IsAlternateKey = true)]
         public DbSet<Trigger> Triggers { get; set; } = null!;
@@ -290,6 +303,7 @@ namespace OzmaDBSchema.System
         public List<FieldAttributes>? FieldsAttributes { get; set; }
         public List<Module>? Modules { get; set; }
         public List<Action>? Actions { get; set; }
+        public List<ActionSchedule>? ActionSchedules { get; set; }
         public List<Trigger>? Triggers { get; set; }
         public UserViewGenerator? UserViewGenerator { get; set; }
         public List<UserView>? UserViews { get; set; }
@@ -740,9 +754,66 @@ namespace OzmaDBSchema.System
         [ColumnField("array(string)", Default = "array[]")]
         public string[] OnTimeFields { get; set; } = new string[0];
 
+        [ColumnField("int", Default = "0")]
+        public int OnTimeOffsetValue { get; set; }
+
+        [ColumnField("enum('MINUTES', 'HOURS', 'DAYS')", Default = "'MINUTES'")]
+        [Required]
+        public string OnTimeOffsetUnit { get; set; } = "MINUTES";
+
         [ColumnField("string")]
         [Required]
         public string Procedure { get; set; } = null!;
+    }
+
+    public class ActionSchedule
+    {
+        public int Id { get; set; }
+
+        [ColumnField("reference(public.schemas)")]
+        public int SchemaId { get; set; }
+        public Schema? Schema { get; set; }
+
+        [ColumnField("string")]
+        [Required]
+        public string Name { get; set; } = null!;
+
+        [ColumnField("string")]
+        [Required]
+        public string ActionName { get; set; } = null!;
+
+        [ColumnField("json", Default = "{}")]
+        [Column(TypeName = "jsonb")]
+        [Required]
+        public string Args { get; set; } = "{}";
+
+        [ColumnField("bool", Default = "true")]
+        public bool IsEnabled { get; set; } = true;
+
+        [ColumnField("enum('DAILY', 'ONCE')", Default = "'DAILY'")]
+        [Required]
+        public string ScheduleType { get; set; } = "DAILY";
+
+        [ColumnField("int", Default = "0")]
+        public int Hour { get; set; }
+
+        [ColumnField("int", Default = "0")]
+        public int Minute { get; set; }
+
+        [ColumnField("datetime")]
+        public Instant? RunAt { get; set; }
+
+        [ColumnField("datetime")]
+        public Instant? LastRunAt { get; set; }
+
+        [ColumnField("datetime")]
+        public Instant? LockedUntil { get; set; }
+
+        [ColumnField("int", Default = "0")]
+        public int Attempts { get; set; }
+
+        [ColumnField("string")]
+        public string? LastError { get; set; }
     }
 
     public class TimeTriggerTask
@@ -787,6 +858,13 @@ namespace OzmaDBSchema.System
         [ColumnField("string", IsImmutable = true)]
         [Required]
         public string FieldName { get; set; } = null!;
+
+        [ColumnField("int")]
+        public int OffsetValue { get; set; }
+
+        [ColumnField("enum('MINUTES', 'HOURS', 'DAYS')")]
+        [Required]
+        public string OffsetUnit { get; set; } = "MINUTES";
 
         [ColumnField("datetime")]
         public Instant DueAt { get; set; }

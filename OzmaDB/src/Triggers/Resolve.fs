@@ -91,12 +91,17 @@ type private Phase1Resolver(layout: Layout, forceAllowBroken: bool) =
             | FTScalar SFTDateTime -> ()
             | _ -> raisef ResolveTriggersException "TIME triggers are only supported for datetime fields: %O" fieldName
 
+        if trigger.OnTimeOffsetValue < 0 then
+            raisef ResolveTriggersException "TIME trigger offset must be non-negative"
+
         { Priority = trigger.Priority
           Time = trigger.Time
           OnInsert = trigger.OnInsert
           OnUpdateFields = updateFields
           OnDelete = trigger.OnDelete
           OnTimeFields = timeFields
+          OnTimeOffsetValue = trigger.OnTimeOffsetValue
+          OnTimeOffsetUnit = trigger.OnTimeOffsetUnit
           Procedure = trigger.Procedure
           AllowBroken = trigger.AllowBroken }
 

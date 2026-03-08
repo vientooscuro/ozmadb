@@ -27,6 +27,8 @@ type ResolvedTrigger =
       OnUpdateFields: TriggerUpdateFields
       OnDelete: bool
       OnTimeFields: Set<FieldName>
+      OnTimeOffsetValue: int
+      OnTimeOffsetUnit: TriggerTimeOffsetUnit
       Procedure: string
       AllowBroken: bool }
 

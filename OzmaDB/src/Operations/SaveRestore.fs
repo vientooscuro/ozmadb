@@ -109,7 +109,10 @@ type PrettyTriggerMeta =
       OnInsert: bool
       OnUpdateFields: FieldName[]
       OnDelete: bool
-      OnTimeFields: FieldName[] }
+      OnTimeFields: FieldName[]
+      [<DefaultValue(0)>]
+      OnTimeOffsetValue: int
+      OnTimeOffsetUnit: TriggerTimeOffsetUnit }
 
 type PrettyActionMeta = { AllowBroken: bool }
 
@@ -1485,10 +1488,17 @@ let private prettifyTriggerMeta (trigger: SourceTrigger) : PrettyTriggerMeta =
       OnInsert = trigger.OnInsert
       OnUpdateFields = trigger.OnUpdateFields
       OnDelete = trigger.OnDelete
-      OnTimeFields = trigger.OnTimeFields }
+      OnTimeFields = trigger.OnTimeFields
+      OnTimeOffsetValue = trigger.OnTimeOffsetValue
+      OnTimeOffsetUnit = trigger.OnTimeOffsetUnit }
 
 let private deprettifyTrigger (meta: PrettyTriggerMeta) (procedure: string) : SourceTrigger =
     let onTimeFields = if isNull meta.OnTimeFields then [||] else meta.OnTimeFields
+    let onTimeOffsetUnit =
+        if isNull (box meta.OnTimeOffsetUnit) then
+            TTOUMinutes
+        else
+            meta.OnTimeOffsetUnit
 
     { AllowBroken = meta.AllowBroken
       Priority = meta.Priority
@@ -1497,6 +1507,8 @@ let private deprettifyTrigger (meta: PrettyTriggerMeta) (procedure: string) : So
       OnUpdateFields = meta.OnUpdateFields
       OnDelete = meta.OnDelete
       OnTimeFields = onTimeFields
+      OnTimeOffsetValue = meta.OnTimeOffsetValue
+      OnTimeOffsetUnit = onTimeOffsetUnit
       Procedure = procedure }
 
 let private prettifyColumnField

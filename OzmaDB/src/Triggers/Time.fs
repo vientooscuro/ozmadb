@@ -8,6 +8,7 @@ open NodaTime
 open OzmaDB.OzmaUtils
 open OzmaDB.OzmaQL.AST
 open OzmaDB.Layout.Types
+open OzmaDB.Triggers.Source
 open OzmaDB.Triggers.Types
 open OzmaDB.Triggers.Merge
 open OzmaDB.SQL.Query
@@ -20,6 +21,8 @@ type ClaimedTimeTriggerTask =
     { Id: int
       Attempts: int
       DueAt: Instant
+      OffsetValue: int
+      OffsetUnit: TriggerTimeOffsetUnit
       Trigger: TriggerRef
       EventEntity: ResolvedEntityRef
       RootEntity: ResolvedEntityRef
@@ -72,14 +75,16 @@ let private enqueueSingleField
 
             let values =
                 triggers
-                |> Seq.map (triggerRefForEvent eventEntity)
-                |> Seq.map (fun (triggerRef: TriggerRef) ->
+                |> Seq.map (fun trig -> (triggerRefForEvent eventEntity trig, trig.OnTimeOffsetValue, trig.OnTimeOffsetUnit))
+                |> Seq.map (fun (triggerRef: TriggerRef, offsetValue: int, offsetUnit: TriggerTimeOffsetUnit) ->
                     sprintf
-                        "(%s, %s, %s, %s)"
+                        "(%s, %s, %s, %s, %s, %s)"
                         (SQL.renderSqlString (string triggerRef.Schema))
                         (SQL.renderSqlString (string triggerRef.Entity.Schema))
                         (SQL.renderSqlString (string triggerRef.Entity.Name))
-                        (SQL.renderSqlString (string triggerRef.Name)))
+                        (SQL.renderSqlString (string triggerRef.Name))
+                        (SQL.renderSqlInt offsetValue)
+                        (SQL.renderSqlString (offsetUnit.ToString())))
                 |> String.concat ", "
 
             let q =
@@ -96,6 +101,8 @@ INSERT INTO %s (
   root_entity_name,
   row_id,
   field_name,
+  offset_value,
+  offset_unit,
   due_at,
   locked_until,
   attempts,
@@ -112,12 +119,19 @@ SELECT
   %s,
   t.%s,
   %s,
-  t.%s,
+  v.offset_value,
+  v.offset_unit,
+  CASE v.offset_unit
+    WHEN 'MINUTES' THEN t.%s - make_interval(mins => v.offset_value)
+    WHEN 'HOURS' THEN t.%s - make_interval(hours => v.offset_value)
+    WHEN 'DAYS' THEN t.%s - make_interval(days => v.offset_value)
+    ELSE t.%s
+  END,
   NULL,
   0,
   NULL
 FROM %s AS t
-JOIN (VALUES %s) AS v(trigger_schema, trigger_entity_schema, trigger_entity_name, trigger_name) ON TRUE
+JOIN (VALUES %s) AS v(trigger_schema, trigger_entity_schema, trigger_entity_name, trigger_name, offset_value, offset_unit) ON TRUE
 WHERE t.%s = %s AND t.%s IS NOT NULL
 ON CONFLICT (
   trigger_schema,
@@ -129,6 +143,8 @@ ON CONFLICT (
   row_id,
   field_name
 ) DO UPDATE SET
+  offset_value = EXCLUDED.offset_value,
+  offset_unit = EXCLUDED.offset_unit,
   due_at = EXCLUDED.due_at,
   locked_until = NULL,
   attempts = 0,
@@ -141,6 +157,9 @@ ON CONFLICT (
                     (SQL.renderSqlString (string rootEntity.Name))
                     (SQL.renderSqlName "id")
                     (SQL.renderSqlString (string fieldName))
+                    (columnName.ToSQLString())
+                    (columnName.ToSQLString())
+                    (columnName.ToSQLString())
                     (columnName.ToSQLString())
                     (rootTable.ToSQLString())
                     values
@@ -234,8 +253,15 @@ let private parseClaimedTask (row: (SQL.SQLName * SQL.SimpleValueType * SQL.Valu
           Name = parseName 8 }
       RowId = parseInt 9
       FieldName = parseName 10
-      DueAt = parseInstant 11
-      Attempts = parseInt 12 }
+      OffsetValue = parseInt 11
+      OffsetUnit =
+        match parseName 12 with
+        | OzmaQLName "MINUTES" -> TTOUMinutes
+        | OzmaQLName "HOURS" -> TTOUHours
+        | OzmaQLName "DAYS" -> TTOUDays
+        | OzmaQLName unit -> failwithf "Invalid time-trigger offset unit: %s" unit
+      DueAt = parseInstant 13
+      Attempts = parseInt 14 }
 
 let tryClaimDueTimeTrigger
     (query: QueryConnection)
@@ -271,6 +297,8 @@ RETURNING
   q.root_entity_name,
   q.row_id,
   q.field_name,
+  q.offset_value,
+  q.offset_unit,
   q.due_at,
   q.attempts
 """

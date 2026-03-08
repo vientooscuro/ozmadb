@@ -19,6 +19,11 @@ let timeCasesMap =
     |> Seq.map (fun (case, value) -> (Option.get (caseKey case.Info), value))
     |> dict
 
+let timeOffsetUnitCasesMap =
+    enumCases<TriggerTimeOffsetUnit>
+    |> Seq.map (fun (case, value) -> (Option.get (caseKey case.Info), value))
+    |> dict
+
 let private makeSourceAttributeField (trig: Trigger) : SourceTrigger =
     let onTimeFields = if isNull trig.OnTimeFields then [||] else trig.OnTimeFields
 
@@ -29,6 +34,8 @@ let private makeSourceAttributeField (trig: Trigger) : SourceTrigger =
       OnUpdateFields = Array.map OzmaQLName trig.OnUpdateFields
       OnDelete = trig.OnDelete
       OnTimeFields = Array.map OzmaQLName onTimeFields
+      OnTimeOffsetValue = trig.OnTimeOffsetValue
+      OnTimeOffsetUnit = timeOffsetUnitCasesMap.[trig.OnTimeOffsetUnit]
       Procedure = trig.Procedure }
 
 let private makeSourceTriggersDatabase (schema: Schema) : SourceTriggersDatabase =

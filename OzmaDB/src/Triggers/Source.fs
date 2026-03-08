@@ -22,6 +22,22 @@ type TriggerTime =
     interface IOzmaQLString with
         member this.ToOzmaQLString() = this.ToOzmaQLString()
 
+[<SerializeAsObject("type")>]
+type TriggerTimeOffsetUnit =
+    | [<CaseKey("MINUTES")>] TTOUMinutes
+    | [<CaseKey("HOURS")>] TTOUHours
+    | [<CaseKey("DAYS")>] TTOUDays
+
+    static member private LookupKey = prepareLookupCaseKey<TriggerTimeOffsetUnit>
+
+    override this.ToString() = this.ToOzmaQLString()
+
+    member this.ToOzmaQLString() =
+        TriggerTimeOffsetUnit.LookupKey this |> Option.get
+
+    interface IOzmaQLString with
+        member this.ToOzmaQLString() = this.ToOzmaQLString()
+
 type SourceTrigger =
     { AllowBroken: bool
       [<DefaultValue(0)>]
@@ -31,6 +47,9 @@ type SourceTrigger =
       OnUpdateFields: FieldName[]
       OnDelete: bool
       OnTimeFields: FieldName[]
+      [<DefaultValue(0)>]
+      OnTimeOffsetValue: int
+      OnTimeOffsetUnit: TriggerTimeOffsetUnit
       Procedure: string }
 
 type SourceTriggersEntity =
