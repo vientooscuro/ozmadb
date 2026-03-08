@@ -190,7 +190,10 @@ let private generateSeriesSignatures: FunctionSignaturesMap =
           ([ STDateTime; STDateTime; STInterval ], STDateTime) ]
 
 let private roundSignatures: FunctionSignaturesMap =
-    funScalarsToSignatures [ ([ STInt ], STInt); ([ STDecimal ], STDecimal); ([ STDecimal; STInt ], STDecimal) ]
+    funScalarsToSignatures
+        [ ([ STInt ], STInt)
+          ([ STDecimal ], STDecimal)
+          ([ STDecimal; STInt ], STDecimal) ]
 
 let sqlKnownFunctions: Map<FunctionName, FunctionSignaturesMap> =
     Map.ofList

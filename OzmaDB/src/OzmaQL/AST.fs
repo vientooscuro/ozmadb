@@ -873,8 +873,10 @@ and FieldExpr<'e, 'f> when 'e :> IOzmaQLName and 'f :> IOzmaQLName =
             sprintf "(%s) NOT IN (%s)" (e.ToOzmaQLString()) (vals |> Seq.map toOzmaQLString |> String.concat ", ")
         | FEInQuery(e, query) -> sprintf "(%s) IN (%s)" (e.ToOzmaQLString()) (query.ToOzmaQLString())
         | FENotInQuery(e, query) -> sprintf "(%s) NOT IN (%s)" (e.ToOzmaQLString()) (query.ToOzmaQLString())
-        | FEBetween(e, lo, hi) -> sprintf "(%s) BETWEEN (%s) AND (%s)" (e.ToOzmaQLString()) (lo.ToOzmaQLString()) (hi.ToOzmaQLString())
-        | FENotBetween(e, lo, hi) -> sprintf "(%s) NOT BETWEEN (%s) AND (%s)" (e.ToOzmaQLString()) (lo.ToOzmaQLString()) (hi.ToOzmaQLString())
+        | FEBetween(e, lo, hi) ->
+            sprintf "(%s) BETWEEN (%s) AND (%s)" (e.ToOzmaQLString()) (lo.ToOzmaQLString()) (hi.ToOzmaQLString())
+        | FENotBetween(e, lo, hi) ->
+            sprintf "(%s) NOT BETWEEN (%s) AND (%s)" (e.ToOzmaQLString()) (lo.ToOzmaQLString()) (hi.ToOzmaQLString())
         | FEAny(e, op, arr) ->
             sprintf "(%s) %s ANY (%s)" (e.ToOzmaQLString()) (op.ToOzmaQLString()) (arr.ToOzmaQLString())
         | FEAll(e, op, arr) ->
@@ -1792,8 +1794,10 @@ let mapTaskFieldExpr
         | FENotIn(e, vals) -> Task.map2 (curry FENotIn) (traverse e) (Array.mapTask traverse vals)
         | FEInQuery(e, query) -> Task.map2 (curry FEInQuery) (traverse e) (mapper.Query query)
         | FENotInQuery(e, query) -> Task.map2 (curry FENotInQuery) (traverse e) (mapper.Query query)
-        | FEBetween(e, lo, hi) -> Task.map3 (fun e lo hi -> FEBetween(e, lo, hi)) (traverse e) (traverse lo) (traverse hi)
-        | FENotBetween(e, lo, hi) -> Task.map3 (fun e lo hi -> FENotBetween(e, lo, hi)) (traverse e) (traverse lo) (traverse hi)
+        | FEBetween(e, lo, hi) ->
+            Task.map3 (fun e lo hi -> FEBetween(e, lo, hi)) (traverse e) (traverse lo) (traverse hi)
+        | FENotBetween(e, lo, hi) ->
+            Task.map3 (fun e lo hi -> FENotBetween(e, lo, hi)) (traverse e) (traverse lo) (traverse hi)
         | FEAny(e, op, arr) -> Task.map2 (fun e arr -> FEAny(e, op, arr)) (traverse e) (traverse arr)
         | FEAll(e, op, arr) -> Task.map2 (fun e arr -> FEAll(e, op, arr)) (traverse e) (traverse arr)
         | FEArrayIndex(arr, idx) -> Task.map2 (curry FEArrayIndex) (traverse arr) (traverse idx)

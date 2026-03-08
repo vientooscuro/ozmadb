@@ -255,14 +255,7 @@ let scheduleUpdatedRowTimeTriggers
             |> Seq.exists (fun field -> Set.contains field updatedFields)
 
         if shouldReschedule then
-            do!
-                scheduleRowTimeTriggers
-                    query
-                    layout
-                    triggers
-                    eventEntity
-                    rowId
-                    cancellationToken
+            do! scheduleRowTimeTriggers query layout triggers eventEntity rowId cancellationToken
     }
 
 let removeRowTimeTriggers

@@ -654,8 +654,10 @@ type ValueExpr =
             sprintf "(%s) NOT IN (%s)" (e.ToSQLString()) (vals |> Seq.map toSQLString |> String.concat ", ")
         | VEInQuery(e, query) -> sprintf "(%s) IN (%s)" (e.ToSQLString()) (query.ToSQLString())
         | VENotInQuery(e, query) -> sprintf "(%s) NOT IN (%s)" (e.ToSQLString()) (query.ToSQLString())
-        | VEBetween(e, lo, hi) -> sprintf "(%s) BETWEEN (%s) AND (%s)" (e.ToSQLString()) (lo.ToSQLString()) (hi.ToSQLString())
-        | VENotBetween(e, lo, hi) -> sprintf "(%s) NOT BETWEEN (%s) AND (%s)" (e.ToSQLString()) (lo.ToSQLString()) (hi.ToSQLString())
+        | VEBetween(e, lo, hi) ->
+            sprintf "(%s) BETWEEN (%s) AND (%s)" (e.ToSQLString()) (lo.ToSQLString()) (hi.ToSQLString())
+        | VENotBetween(e, lo, hi) ->
+            sprintf "(%s) NOT BETWEEN (%s) AND (%s)" (e.ToSQLString()) (lo.ToSQLString()) (hi.ToSQLString())
         | VEIsNull a -> sprintf "(%s) IS NULL" (a.ToSQLString())
         | VEIsNotNull a -> sprintf "(%s) IS NOT NULL" (a.ToSQLString())
         | VESpecialFunc(name, args) ->
