@@ -923,7 +923,7 @@ namespace OzmaDBSchema.System
         [ColumnField("int", Default = "250")]
         public int RetryBaseDelayMs { get; set; } = 250;
 
-        [ColumnField("datetime", Default = "transaction_timestamp()")]
+        [ColumnField("datetime")]
         public Instant DueAt { get; set; }
 
         [ColumnField("datetime")]
