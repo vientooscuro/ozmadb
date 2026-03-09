@@ -217,10 +217,9 @@ let private outputAttributeNames (attrName: AttributeName) : AttributeName[] =
 let private forceSingleRowAttribute (attrName: AttributeName) (attr: ResolvedBoundAttribute) =
     // `view_reference = &schema.view` is a static column-level hint, even if dependency was omitted.
     attrName = viewReferenceAttributeName
-    &&
-    match attr.Expression with
-    | BAExpr(FEValue(FUserViewRef _)) -> true
-    | _ -> false
+    && match attr.Expression with
+       | BAExpr(FEValue(FUserViewRef _)) -> true
+       | _ -> false
 
 let private getSingleRowAttributeExpr
     (attrName: AttributeName)
@@ -2447,6 +2446,7 @@ type private QueryCompiler
         let getResultColumnEntry (i: int) (result: ResolvedQueryColumnResult) : ResultColumn =
             let (newPaths, resultColumn) = compileColumnResult ctx paths flags.IsTopLevel result
             paths <- newPaths
+
             let hasViewReferenceAttribute =
                 Map.containsKey viewReferenceAttributeName result.Attributes
                 || Map.containsKey linkAttributeName result.Attributes
@@ -2489,7 +2489,11 @@ type private QueryCompiler
                                   ValueType = None }
 
                             let ret = { Expression = compiled; Info = info }
-                            Some(outputAttributeNames name |> Seq.map (fun outputName -> (CCCellAttribute outputName, ret)))
+
+                            Some(
+                                outputAttributeNames name
+                                |> Seq.map (fun outputName -> (CCCellAttribute outputName, ret))
+                            )
 
                     attrs |> Map.toSeq |> Seq.mapMaybe makeDefaultAttr |> Seq.collect id
 
@@ -3007,7 +3011,9 @@ type private QueryCompiler
 
             paths <- newPaths
             let ret = { Expression = ret; Info = info }
-            outputAttributeNames attrName |> Seq.map (fun outputName -> (CCCellAttribute outputName, ret))
+
+            outputAttributeNames attrName
+            |> Seq.map (fun outputName -> (CCCellAttribute outputName, ret))
 
         let attrs = result.Attributes |> Map.toSeq |> Seq.collect compileAttr |> Map.ofSeq
 
