@@ -205,6 +205,26 @@ let private resultMetaColumn (expr: SQL.ValueExpr) : ResultMetaColumn =
     { Expression = expr
       Info = emptyColumnMetaInfo }
 
+let private viewReferenceAttributeName = OzmaQLName "view_reference"
+
+let private forceSingleRowAttribute (attrName: AttributeName) (attr: ResolvedBoundAttribute) =
+    // `view_reference = &schema.view` is a static column-level hint, even if dependency was omitted.
+    attrName = viewReferenceAttributeName
+    &&
+    match attr.Expression with
+    | BAExpr(FEValue(FUserViewRef _)) -> true
+    | _ -> false
+
+let private getSingleRowAttributeExpr
+    (attrName: AttributeName)
+    (attr: ResolvedBoundAttribute)
+    (expr: SQL.ValueExpr)
+    : SQL.ValueExpr option =
+    if attr.Dependency = DSPerRow && not (forceSingleRowAttribute attrName attr) then
+        None
+    else
+        Some expr
+
 // Expressions are not fully assembled right away. Instead we build SELECTs with no selected columns
 // and this record in `extra`. During first pass through a union expression we collect signatures
 // of all sub-SELECTs and build an ordered list of all columns, including meta-. Then we do a second
@@ -2456,11 +2476,7 @@ type private QueryCompiler
                                 { Mapping = mapping
                                   Dependency = attr.Attribute.Value.Dependency
                                   Internal = attr.Attribute.Value.Internal
-                                  SingleRow =
-                                    if attr.Attribute.Value.Dependency = DSPerRow then
-                                        None
-                                    else
-                                        Some compiled
+                                  SingleRow = getSingleRowAttributeExpr name attr.Attribute.Value compiled
                                   ValueType = None }
 
                             let ret = { Expression = compiled; Info = info }
@@ -2959,7 +2975,7 @@ type private QueryCompiler
                 { Mapping = mapping
                   Dependency = attr.Dependency
                   Internal = attr.Internal
-                  SingleRow = if attr.Dependency = DSPerRow then None else Some ret
+                  SingleRow = getSingleRowAttributeExpr attrName attr ret
                   ValueType = None }
 
             paths <- newPaths
