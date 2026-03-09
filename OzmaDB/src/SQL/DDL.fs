@@ -594,7 +594,7 @@ type SchemaOperation =
         | SOCreateSequence seq -> sprintf "CREATE SEQUENCE %s" (seq.ToSQLString())
         | SORenameSequence(seq, toName) ->
             sprintf "ALTER SEQUENCE %s RENAME TO %s" (seq.ToSQLString()) (toName.ToSQLString())
-        | SODropSequence seq -> sprintf "DROP SEQUENCE %s" (seq.ToSQLString())
+        | SODropSequence seq -> sprintf "DROP SEQUENCE IF EXISTS %s" (seq.ToSQLString())
         | SOCreateConstraint(table, name, pars) ->
             sprintf "ALTER TABLE %O ADD CONSTRAINT %s %O" table (toSQLString name) pars
         | SORenameConstraint(table, name, toName) ->

@@ -30,7 +30,7 @@ type ClaimedTimeTriggerTask =
       FieldName: FieldName }
 
 let private queueTableName = "public.time_trigger_tasks"
-let private firedTableName = "public.time_trigger_fired"
+let private firedTableName = "public.time_trigger_fired_rows"
 
 let private triggerRefForEvent (eventEntity: ResolvedEntityRef) (trigger: MergedTrigger) : TriggerRef =
     let entityRef = Option.defaultValue eventEntity trigger.Inherited
