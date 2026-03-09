@@ -584,17 +584,9 @@ let runViewExpr
                         let queryColumns = Array.append [| requestLinesColumnInfo |] viewExpr.Columns
 
                         let! (info, rowsArr) =
-                            connection.ExecuteQuery
-                                (prefix + rowsQuery)
-                                parameters
-                                cancellationToken
+                            connection.ExecuteQuery (prefix + rowsQuery) parameters cancellationToken
                             <| fun resultColumns rawRows ->
-                                parseResult
-                                    viewExpr.MainRootEntity
-                                    viewExpr.Domains
-                                    queryColumns
-                                    resultColumns
-                                    rawRows
+                                parseResult viewExpr.MainRootEntity viewExpr.Domains queryColumns resultColumns rawRows
                                 <| fun info rows ->
                                     task {
                                         let! rowsArr = rows.ToArrayAsync(cancellationToken)
