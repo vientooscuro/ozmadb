@@ -230,6 +230,16 @@ let private getTotalRowsCountQuery (rowsQuery: SQL.SelectExpr) : string =
     let fullQuery = stripTopLevelLimitOffset rowsQuery
     sprintf "SELECT count(*) FROM (%s) AS __request_lines_number" (fullQuery.ToSQLString())
 
+let private requestLinesRowAttributeName = OzmaQLName "__request_lines_number"
+let private requestLinesRowColumnName = SQL.SQLName "__request_lines_number"
+
+let private getRequestLinesRowsQuery (baseExpr: SQL.SelectExpr) (rowsExpr: SQL.SelectExpr) : string =
+    sprintf
+        "WITH __request_lines_base AS (%s), __request_lines_chunk AS (%s) SELECT __request_lines_meta.total AS %s, __request_lines_chunk.* FROM __request_lines_chunk CROSS JOIN (SELECT count(*)::integer AS total FROM __request_lines_base) __request_lines_meta"
+        (baseExpr.ToSQLString())
+        (rowsExpr.ToSQLString())
+        (string requestLinesRowColumnName)
+
 let private parseAttributesResult
     (columns: ColumnType[])
     (values: (SQL.SQLName * SQL.SimpleValueType * SQL.Value)[])
@@ -560,26 +570,29 @@ let runViewExpr
                     }
                 | Some placeholderId ->
                     task {
-                        let countQuery = getTotalRowsCountQuery viewExpr.Query.Expression
+                        let baseExpr =
+                            Option.defaultValue viewExpr.Query.Expression viewExpr.RequestLinesNumberBaseExpression
 
-                        let! countResult =
-                            connection.ExecuteValueQuery (prefix + countQuery) parameters cancellationToken
+                        let rowsQuery = getRequestLinesRowsQuery baseExpr viewExpr.Query.Expression
 
-                        let totalRows =
-                            match countResult with
-                            | Some(_, _, v) -> SQL.parseIntValue v |> int
-                            | None -> failwith "Unexpected empty count query result"
+                        let requestLinesColumnInfo =
+                            { Type = CTMeta(CMRowAttribute requestLinesRowAttributeName)
+                              Name = requestLinesRowColumnName
+                              Info = emptyColumnMetaInfo }
+                            : CompiledColumnInfo
+
+                        let queryColumns = Array.append [| requestLinesColumnInfo |] viewExpr.Columns
 
                         let! (info, rowsArr) =
                             connection.ExecuteQuery
-                                (prefix + viewExpr.Query.Expression.ToSQLString())
+                                (prefix + rowsQuery)
                                 parameters
                                 cancellationToken
                             <| fun resultColumns rawRows ->
                                 parseResult
                                     viewExpr.MainRootEntity
                                     viewExpr.Domains
-                                    viewExpr.Columns
+                                    queryColumns
                                     resultColumns
                                     rawRows
                                 <| fun info rows ->
@@ -587,6 +600,23 @@ let runViewExpr
                                         let! rowsArr = rows.ToArrayAsync(cancellationToken)
                                         return (info, rowsArr)
                                     }
+
+                        let totalRows =
+                            rowsArr
+                            |> Array.tryHead
+                            |> Option.bind (fun row -> Map.tryFind requestLinesRowAttributeName row.Attributes)
+                            |> Option.map SQL.parseSmallIntValue
+                            |> Option.defaultValue 0
+
+                        let info =
+                            { info with
+                                RowAttributeTypes = Map.remove requestLinesRowAttributeName info.RowAttributeTypes }
+
+                        let rowsArr =
+                            rowsArr
+                            |> Array.map (fun row ->
+                                { row with
+                                    Attributes = Map.remove requestLinesRowAttributeName row.Attributes })
 
                         let attrsParameters = Map.add placeholderId (SQL.VInt totalRows) parameters
                         let! attrsResult = getAttrsResult attrsParameters

@@ -170,9 +170,23 @@ type UserViewsAPI(api: IOzmaDBAPI) =
 
                             let chunk = Option.defaultValue emptySourceQueryChunk req.Chunk
                             let resolvedChunk = resolveViewExprChunk ctx.Layout compiled chunk
-                            let (extraLocalArgs, query) = queryExprChunk ctx.Layout resolvedChunk compiled.Query
+                            let (extraLocalArgs, query, baseQuery) =
+                                if Option.isSome compiled.RequestLinesNumberPlaceholderId then
+                                    queryExprChunkWithRequestLinesBase ctx.Layout resolvedChunk compiled.Query
+                                else
+                                    let (extraLocalArgs, query) =
+                                        queryExprChunk ctx.Layout resolvedChunk compiled.Query
+
+                                    (extraLocalArgs, query, query)
                             let extraArgValues = Map.mapKeys PLocal extraLocalArgs
-                            let compiled = { compiled with Query = query }
+                            let compiled =
+                                { compiled with
+                                    Query = query
+                                    RequestLinesNumberBaseExpression =
+                                        if Option.isSome compiled.RequestLinesNumberPlaceholderId then
+                                            Some baseQuery.Expression
+                                        else
+                                            None }
 
                             let maybeArgs =
                                 Option.map
@@ -227,9 +241,21 @@ type UserViewsAPI(api: IOzmaDBAPI) =
 
                         let chunk = Option.defaultValue emptySourceQueryChunk req.Chunk
                         let resolvedChunk = resolveViewExprChunk ctx.Layout compiled chunk
-                        let (extraLocalArgs, query) = queryExprChunk ctx.Layout resolvedChunk compiled.Query
+                        let (extraLocalArgs, query, baseQuery) =
+                            if Option.isSome compiled.RequestLinesNumberPlaceholderId then
+                                queryExprChunkWithRequestLinesBase ctx.Layout resolvedChunk compiled.Query
+                            else
+                                let (extraLocalArgs, query) = queryExprChunk ctx.Layout resolvedChunk compiled.Query
+                                (extraLocalArgs, query, query)
                         let extraArgValues = Map.mapKeys PLocal extraLocalArgs
-                        let compiled = { compiled with Query = query }
+                        let compiled =
+                            { compiled with
+                                Query = query
+                                RequestLinesNumberBaseExpression =
+                                    if Option.isSome compiled.RequestLinesNumberPlaceholderId then
+                                        Some baseQuery.Expression
+                                    else
+                                        None }
 
                         let arguments =
                             convertQueryArguments rctx.GlobalArguments extraArgValues req.Args compiled.Query.Arguments

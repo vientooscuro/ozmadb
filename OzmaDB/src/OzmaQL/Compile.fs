@@ -454,6 +454,7 @@ type CompiledPragmasMap = Map<SQL.ParameterName, SQL.Value>
 type CompiledViewExpr =
     { Pragmas: CompiledPragmasMap
       RequestLinesNumberPlaceholderId: int option
+      RequestLinesNumberBaseExpression: SQL.SelectExpr option
       SingleRowQuery: CompiledSingleRowExpr
       Query: Query<SQL.SelectExpr>
       UsedDatabase: FlatUsedDatabase
@@ -4165,6 +4166,7 @@ let compileViewExpr
             Some requestLinesNumberPlaceholderId
         else
             None
+      RequestLinesNumberBaseExpression = None
       SingleRowQuery = attrQuery
       Query =
         { Expression = perRowExpr

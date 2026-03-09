@@ -324,3 +324,63 @@ let queryExprChunk
         : Query<SQL.SelectExpr>
 
     (argValues, res)
+
+let queryExprChunkWithRequestLinesBase
+    (layout: Layout)
+    (chunk: ResolvedQueryChunk)
+    (query: Query<SQL.SelectExpr>)
+    : LocalArgumentsMap * Query<SQL.SelectExpr> * Query<SQL.SelectExpr> =
+    let argValues = Map.empty: LocalArgumentsMap
+    let arguments = query.Arguments
+
+    let (argValues, arguments, sqlOffset) =
+        maybeAddAnonymousInt chunk.Offset argValues arguments
+
+    let (argValues, arguments, sqlLimit) =
+        maybeAddAnonymousInt chunk.Limit argValues arguments
+
+    let (argValues, arguments, sqlWhere) =
+        match chunk.Where with
+        | None -> (argValues, arguments, None)
+        | Some where ->
+            let foldArgs (argValues, arguments, chunkArguments) (name, argValue) =
+                let argumentInfo = OrderedMap.find (PLocal name) where.Arguments
+                let (argId, anonName, arguments) = addAnonymousArgument argumentInfo arguments
+                let chunkArguments = Map.add anonName name chunkArguments
+                let argValues = Map.add anonName argValue argValues
+                (argValues, arguments, chunkArguments)
+
+            let (argValues, arguments, chunkArguments) =
+                Seq.fold foldArgs (argValues, arguments, Map.empty) (Map.toSeq where.ArgumentValues)
+
+            let (arguments, compiled) =
+                compileWhereExpr layout arguments chunkArguments where.Expression
+
+            (argValues, arguments, Some compiled)
+
+    let sqlChunk =
+        { Offset = sqlOffset
+          Limit = sqlLimit
+          Where = sqlWhere }
+        : SQL.QueryChunk
+
+    let sqlChunkWithoutLimit =
+        { Offset = None
+          Limit = None
+          Where = sqlWhere }
+        : SQL.QueryChunk
+
+    let queryExpr = SQL.selectExprChunk sqlChunk query.Expression
+    let baseExpr = SQL.selectExprChunk sqlChunkWithoutLimit query.Expression
+
+    let res =
+        { Arguments = arguments
+          Expression = queryExpr }
+        : Query<SQL.SelectExpr>
+
+    let baseRes =
+        { Arguments = arguments
+          Expression = baseExpr }
+        : Query<SQL.SelectExpr>
+
+    (argValues, res, baseRes)
