@@ -232,13 +232,18 @@ let private getTotalRowsCountQuery (rowsQuery: SQL.SelectExpr) : string =
 
 let private requestLinesRowAttributeName = OzmaQLName "__request_lines_number"
 let private requestLinesRowColumnName = SQL.SQLName "__request_lines_number"
+let private requestLinesHasRowAttributeName = OzmaQLName "__request_lines_has_row"
+let private requestLinesHasRowColumnName = SQL.SQLName "__request_lines_has_row"
 
 let private getRequestLinesRowsQuery (baseExpr: SQL.SelectExpr) (rowsExpr: SQL.SelectExpr) : string =
     sprintf
-        "WITH __request_lines_base AS (%s), __request_lines_chunk AS (%s) SELECT __request_lines_meta.total AS %s, __request_lines_chunk.* FROM __request_lines_chunk CROSS JOIN (SELECT count(*)::integer AS total FROM __request_lines_base) __request_lines_meta"
+        "WITH __request_lines_base AS (%s), __request_lines_chunk AS (%s) SELECT __request_lines_meta.total AS %s, __request_lines_rows.%s AS %s, __request_lines_rows.* FROM (SELECT count(*)::integer AS total FROM __request_lines_base) __request_lines_meta LEFT JOIN LATERAL (SELECT true AS %s, __request_lines_chunk.* FROM __request_lines_chunk) __request_lines_rows ON true"
         (baseExpr.ToSQLString())
         (rowsExpr.ToSQLString())
         (string requestLinesRowColumnName)
+        (string requestLinesHasRowColumnName)
+        (string requestLinesHasRowColumnName)
+        (string requestLinesHasRowColumnName)
 
 let private parseAttributesResult
     (columns: ColumnType[])
@@ -581,7 +586,16 @@ let runViewExpr
                               Info = emptyColumnMetaInfo }
                             : CompiledColumnInfo
 
-                        let queryColumns = Array.append [| requestLinesColumnInfo |] viewExpr.Columns
+                        let requestLinesHasRowColumnInfo =
+                            { Type = CTMeta(CMRowAttribute requestLinesHasRowAttributeName)
+                              Name = requestLinesHasRowColumnName
+                              Info = emptyColumnMetaInfo }
+                            : CompiledColumnInfo
+
+                        let queryColumns =
+                            Array.append
+                                [| requestLinesColumnInfo; requestLinesHasRowColumnInfo |]
+                                viewExpr.Columns
 
                         let! (info, rowsArr) =
                             connection.ExecuteQuery (prefix + rowsQuery) parameters cancellationToken
@@ -604,11 +618,23 @@ let runViewExpr
                             { info with
                                 RowAttributeTypes = Map.remove requestLinesRowAttributeName info.RowAttributeTypes }
 
+                        let info =
+                            { info with
+                                RowAttributeTypes = Map.remove requestLinesHasRowAttributeName info.RowAttributeTypes }
+
                         let rowsArr =
                             rowsArr
+                            |> Array.filter (fun row ->
+                                row.Attributes
+                                |> Map.tryFind requestLinesHasRowAttributeName
+                                |> Option.map SQL.parseBoolValue
+                                |> Option.defaultValue false)
                             |> Array.map (fun row ->
                                 { row with
-                                    Attributes = Map.remove requestLinesRowAttributeName row.Attributes })
+                                    Attributes =
+                                        row.Attributes
+                                        |> Map.remove requestLinesRowAttributeName
+                                        |> Map.remove requestLinesHasRowAttributeName })
 
                         let attrsParameters = Map.add placeholderId (SQL.VInt totalRows) parameters
                         let! attrsResult = getAttrsResult attrsParameters
