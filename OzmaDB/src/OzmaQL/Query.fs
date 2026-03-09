@@ -214,22 +214,17 @@ let private stripTopLevelLimitOffset (select: SQL.SelectExpr) : SQL.SelectExpr =
                     Limit = None
                     Offset = None }
 
-            SQL.SSelect
-                { query with
-                    OrderLimit = orderLimit }
+            SQL.SSelect { query with OrderLimit = orderLimit }
         | SQL.SSetOp setOp ->
             let orderLimit =
                 { setOp.OrderLimit with
                     Limit = None
                     Offset = None }
 
-            SQL.SSetOp
-                { setOp with
-                    OrderLimit = orderLimit }
+            SQL.SSetOp { setOp with OrderLimit = orderLimit }
         | (SQL.SValues _ as values) -> values
 
-    { select with
-        Tree = tree }
+    { select with Tree = tree }
 
 let private getTotalRowsCountQuery (rowsQuery: SQL.SelectExpr) : string =
     let fullQuery = stripTopLevelLimitOffset rowsQuery
@@ -555,7 +550,12 @@ let runViewExpr
                                 parameters
                                 cancellationToken
                             <| fun resultColumns rawRows ->
-                                parseResult viewExpr.MainRootEntity viewExpr.Domains viewExpr.Columns resultColumns rawRows
+                                parseResult
+                                    viewExpr.MainRootEntity
+                                    viewExpr.Domains
+                                    viewExpr.Columns
+                                    resultColumns
+                                    rawRows
                                 <| fun info rows -> mergeResults attrsResult info rows
                     }
                 | Some placeholderId ->
@@ -576,7 +576,12 @@ let runViewExpr
                                 parameters
                                 cancellationToken
                             <| fun resultColumns rawRows ->
-                                parseResult viewExpr.MainRootEntity viewExpr.Domains viewExpr.Columns resultColumns rawRows
+                                parseResult
+                                    viewExpr.MainRootEntity
+                                    viewExpr.Domains
+                                    viewExpr.Columns
+                                    resultColumns
+                                    rawRows
                                 <| fun info rows ->
                                     task {
                                         let! rowsArr = rows.ToArrayAsync(cancellationToken)
@@ -639,6 +644,7 @@ let explainViewExpr
                     maybeArguments
 
             let parameters = prepareArguments viewExpr.Query.Arguments arguments
+
             let parameters =
                 match viewExpr.RequestLinesNumberPlaceholderId with
                 | None -> parameters

@@ -3902,8 +3902,7 @@ and private iterSelectExprValues (f: SQLA.ValueExpr -> unit) (select: SQLA.Selec
     let iterCommonTableExpr (cte: SQLA.CommonTableExpr) = iterDataExprValues f cte.Expr
 
     Option.iter
-        (fun (ctes: SQLA.CommonTableExprs) ->
-            ctes.Exprs |> Array.iter (fun (_, cte) -> iterCommonTableExpr cte))
+        (fun (ctes: SQLA.CommonTableExprs) -> ctes.Exprs |> Array.iter (fun (_, cte) -> iterCommonTableExpr cte))
         select.CTEs
 
     iterSelectTreeValues f select.Tree
@@ -3914,8 +3913,7 @@ and private iterDataExprValues (f: SQLA.ValueExpr -> unit) : SQLA.DataExpr -> un
     | SQLA.DEInsert ins ->
         Option.iter
             (fun (ctes: SQLA.CommonTableExprs) ->
-                ctes.Exprs
-                |> Array.iter (fun (_, cte) -> iterDataExprValues f cte.Expr))
+                ctes.Exprs |> Array.iter (fun (_, cte) -> iterDataExprValues f cte.Expr))
             ins.CTEs
 
         match ins.Source with
@@ -3923,10 +3921,11 @@ and private iterDataExprValues (f: SQLA.ValueExpr -> unit) : SQLA.DataExpr -> un
         | SQLA.ISSelect sel -> iterSelectExprValues f sel
         | SQLA.ISValues vals ->
             vals
-            |> Array.iter
-                (Array.iter (function
+            |> Array.iter (
+                Array.iter (function
                     | SQLA.IVDefault -> ()
-                    | SQLA.IVExpr expr -> f expr))
+                    | SQLA.IVExpr expr -> f expr)
+            )
 
         Option.iter
             (fun (onConflict: SQLA.OnConflictExpr) ->
@@ -3946,8 +3945,7 @@ and private iterDataExprValues (f: SQLA.ValueExpr -> unit) : SQLA.DataExpr -> un
     | SQLA.DEUpdate upd ->
         Option.iter
             (fun (ctes: SQLA.CommonTableExprs) ->
-                ctes.Exprs
-                |> Array.iter (fun (_, cte) -> iterDataExprValues f cte.Expr))
+                ctes.Exprs |> Array.iter (fun (_, cte) -> iterDataExprValues f cte.Expr))
             upd.CTEs
 
         upd.Assignments
@@ -3963,8 +3961,7 @@ and private iterDataExprValues (f: SQLA.ValueExpr -> unit) : SQLA.DataExpr -> un
     | SQLA.DEDelete del ->
         Option.iter
             (fun (ctes: SQLA.CommonTableExprs) ->
-                ctes.Exprs
-                |> Array.iter (fun (_, cte) -> iterDataExprValues f cte.Expr))
+                ctes.Exprs |> Array.iter (fun (_, cte) -> iterDataExprValues f cte.Expr))
             del.CTEs
 
         Option.iter (iterFromExprValues f) del.Using
