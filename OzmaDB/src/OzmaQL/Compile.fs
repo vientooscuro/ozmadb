@@ -206,6 +206,13 @@ let private resultMetaColumn (expr: SQL.ValueExpr) : ResultMetaColumn =
       Info = emptyColumnMetaInfo }
 
 let private viewReferenceAttributeName = OzmaQLName "view_reference"
+let private linkAttributeName = OzmaQLName "link"
+
+let private outputAttributeNames (attrName: AttributeName) : AttributeName[] =
+    if attrName = viewReferenceAttributeName then
+        [| attrName; linkAttributeName |]
+    else
+        [| attrName |]
 
 let private forceSingleRowAttribute (attrName: AttributeName) (attr: ResolvedBoundAttribute) =
     // `view_reference = &schema.view` is a static column-level hint, even if dependency was omitted.
@@ -2440,6 +2447,9 @@ type private QueryCompiler
         let getResultColumnEntry (i: int) (result: ResolvedQueryColumnResult) : ResultColumn =
             let (newPaths, resultColumn) = compileColumnResult ctx paths flags.IsTopLevel result
             paths <- newPaths
+            let hasViewReferenceAttribute =
+                Map.containsKey viewReferenceAttributeName result.Attributes
+                || Map.containsKey linkAttributeName result.Attributes
 
             let getDefaultAttributes
                 (updateEntityRef: LinkedBoundFieldRef -> LinkedBoundFieldRef)
@@ -2469,7 +2479,6 @@ type private QueryCompiler
                                 compileBoundAttributeExpr ctx paths (FERef resultRef) converted
 
                             let mapping = boundAttributeToMapping attr.Attribute.Value.Expression
-                            let attrCol = CCCellAttribute name
                             paths <- newPaths
 
                             let info =
@@ -2480,9 +2489,9 @@ type private QueryCompiler
                                   ValueType = None }
 
                             let ret = { Expression = compiled; Info = info }
-                            Some(attrCol, ret)
+                            Some(outputAttributeNames name |> Seq.map (fun outputName -> (CCCellAttribute outputName, ret)))
 
-                    attrs |> Map.toSeq |> Seq.mapMaybe makeDefaultAttr
+                    attrs |> Map.toSeq |> Seq.mapMaybe makeDefaultAttr |> Seq.collect id
 
             let getDefaultArgumentAttributes (argExpr: ResolvedFieldExpr) (argInfo: CompiledArgument) =
                 let makeArgumentAttributeColumn (name: AttributeName, attr: ResolvedBoundAttribute) =
@@ -2588,6 +2597,8 @@ type private QueryCompiler
                             let (newPaths, punExpr) = compileLinkedFieldRef ctx paths punRef
                             paths <- newPaths
                             Seq.singleton (CCPun, resultMetaColumn punExpr)
+                        | _ when hasViewReferenceAttribute && finalRef.Name = funId ->
+                            Seq.singleton (CCPun, resultMetaColumn <| makeSystemColumn funMain)
                         | _ -> Seq.empty
 
                 let replaceRef = replacePathInField layout resultRef true
@@ -2720,6 +2731,24 @@ type private QueryCompiler
 
                                     let (newPaths, expr) =
                                         compileBoundPath pathArgs info.Ref newName [ (newEntityRef, mainArrow) ]
+
+                                    paths <- newPaths
+                                    expr
+                                | _ when hasViewReferenceAttribute && info.Ref.Name = funId ->
+                                    let mainArrow = { Name = funMain; AsRoot = false }
+                                    let newName = getFieldName fieldInfo fieldRef.Name
+
+                                    let pathArgs =
+                                        { Context = ctx
+                                          Extra = ObjectMap.empty
+                                          Paths = paths
+                                          // We filter out puns for NULL references later in query, no need to do it in the database.
+                                          CheckNullExpr = None
+                                          TableRef = Some tableRef
+                                          AsRoot = info.AsRoot || resultRef.Ref.AsRoot }
+
+                                    let (newPaths, expr) =
+                                        compileBoundPath pathArgs info.Ref newName [ (info.Ref.Entity, mainArrow) ]
 
                                     paths <- newPaths
                                     expr
@@ -2964,8 +2993,6 @@ type private QueryCompiler
         paths <- newPaths
 
         let compileAttr (attrName, attr: ResolvedBoundAttribute) =
-            let attrCol = CCCellAttribute attrName
-
             let (newPaths, ret) =
                 compileBoundAttributeExpr ctx paths result.Result attr.Expression
 
@@ -2980,9 +3007,9 @@ type private QueryCompiler
 
             paths <- newPaths
             let ret = { Expression = ret; Info = info }
-            (attrCol, ret)
+            outputAttributeNames attrName |> Seq.map (fun outputName -> (CCCellAttribute outputName, ret))
 
-        let attrs = result.Attributes |> Map.toSeq |> Seq.map compileAttr |> Map.ofSeq
+        let attrs = result.Attributes |> Map.toSeq |> Seq.collect compileAttr |> Map.ofSeq
 
         let name =
             match result.TryToName() with
