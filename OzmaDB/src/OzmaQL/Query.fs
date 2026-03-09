@@ -593,9 +593,7 @@ let runViewExpr
                             : CompiledColumnInfo
 
                         let queryColumns =
-                            Array.append
-                                [| requestLinesColumnInfo; requestLinesHasRowColumnInfo |]
-                                viewExpr.Columns
+                            Array.append [| requestLinesColumnInfo; requestLinesHasRowColumnInfo |] viewExpr.Columns
 
                         let! (info, rowsArr) =
                             connection.ExecuteQuery (prefix + rowsQuery) parameters cancellationToken
