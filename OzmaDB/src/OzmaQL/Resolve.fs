@@ -2193,6 +2193,8 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
 
         relaxEntityRef fullRef
 
+    let requestLinesNumberFunction = OzmaQLName "request_lines_number"
+
     let resolveFieldValue: FieldValue -> FieldValue =
         function
         | FUserViewRef ref -> FUserViewRef(resolveUserViewRef ref)
@@ -2211,16 +2213,19 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
             | _ -> None
         | FECast(_, typ) -> Some <| getResolvedFieldType typ
         | FEFunc(name, args) ->
-            match Map.tryFind (SQL.SQLName <| string name) SQL.sqlKnownFunctions with
-            | Some overloads ->
-                let sqlArgs =
-                    args
-                    |> Array.map (fun arg -> tryInferResolvedFieldExprType arg |> Option.map compileFieldType)
+            if name = requestLinesNumberFunction && Array.isEmpty args then
+                Some(FTScalar SFTInt)
+            else
+                match Map.tryFind (SQL.SQLName <| string name) SQL.sqlKnownFunctions with
+                | Some overloads ->
+                    let sqlArgs =
+                        args
+                        |> Array.map (fun arg -> tryInferResolvedFieldExprType arg |> Option.map compileFieldType)
 
-                match SQL.findFunctionOverloads overloads sqlArgs with
+                    match SQL.findFunctionOverloads overloads sqlArgs with
+                    | None -> None
+                    | Some(_, ret) -> Some <| decompileFieldType ret
                 | None -> None
-                | Some(_, ret) -> Some <| decompileFieldType ret
-            | None -> None
         | FEWindowFunc(name, args, _) ->
             match Map.tryFind (SQL.SQLName <| string name) SQL.sqlKnownFunctions with
             | Some overloads ->

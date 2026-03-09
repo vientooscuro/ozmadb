@@ -22,6 +22,8 @@ let private optionTypeToString: ResolvedFieldType option -> string =
     | Some t -> string t
     | None -> "<unknown>"
 
+let private requestLinesNumberFunction = OzmaQLName "request_lines_number"
+
 type FunctionRepr =
     | FRFunction of SQL.SQLName
     | FRSpecial of SQL.SpecialFunction
@@ -84,37 +86,44 @@ assert checkAllowedFunctions ()
 
 let private checkFunc (name: FunctionName) (args: (ResolvedFieldType option) seq) : ResolvedFieldType =
     try
-        match Map.tryFind name allowedFunctions with
-        | Some(FRFunction name) ->
-            let overloads = Map.find name SQL.sqlKnownFunctions
-            let sqlArgs = args |> Seq.map (Option.map compileFieldType) |> Seq.toArray
+        if name = requestLinesNumberFunction then
+            let argsArr = args |> Seq.toArray
 
-            match SQL.findFunctionOverloads overloads sqlArgs with
-            | None -> raisef ViewTypecheckException "Couldn't deduce function overload"
-            | Some(typs, ret) -> decompileFieldType ret
-        | Some(FRSpecial SQL.SFNullIf) ->
-            let arrArgs = args |> Seq.toArray
+            match argsArr with
+            | [||] -> FTScalar SFTInt
+            | _ -> raisef ViewTypecheckException "request_lines_number() expects no arguments"
+        else
+            match Map.tryFind name allowedFunctions with
+            | Some(FRFunction name) ->
+                let overloads = Map.find name SQL.sqlKnownFunctions
+                let sqlArgs = args |> Seq.map (Option.map compileFieldType) |> Seq.toArray
 
-            match arrArgs with
-            | [| firstArg; secondArg |] ->
-                let overloads = SQL.binaryOperatorSignature SQL.BOEq
+                match SQL.findFunctionOverloads overloads sqlArgs with
+                | None -> raisef ViewTypecheckException "Couldn't deduce function overload"
+                | Some(typs, ret) -> decompileFieldType ret
+            | Some(FRSpecial SQL.SFNullIf) ->
+                let arrArgs = args |> Seq.toArray
 
-                match
-                    SQL.findBinaryOpOverloads
-                        overloads
-                        (Option.map compileFieldType firstArg)
-                        (Option.map compileFieldType secondArg)
-                with
-                | None -> raisef ViewTypecheckException "Cannot compare NULLIF arguments"
-                | Some((firstTyp, _), _) -> decompileFieldType firstTyp
-            | _ -> raisef ViewTypecheckException "NULLIF expects exactly two arguments"
-        | Some(FRSpecial SQL.SFLeast)
-        | Some(FRSpecial SQL.SFGreatest)
-        | Some(FRSpecial SQL.SFCoalesce) ->
-            match unionTypes args with
-            | Some ret -> ret
-            | None -> raisef ViewTypecheckException "Cannot unify values of different types"
-        | None -> raisef ViewTypecheckException "Unknown function"
+                match arrArgs with
+                | [| firstArg; secondArg |] ->
+                    let overloads = SQL.binaryOperatorSignature SQL.BOEq
+
+                    match
+                        SQL.findBinaryOpOverloads
+                            overloads
+                            (Option.map compileFieldType firstArg)
+                            (Option.map compileFieldType secondArg)
+                    with
+                    | None -> raisef ViewTypecheckException "Cannot compare NULLIF arguments"
+                    | Some((firstTyp, _), _) -> decompileFieldType firstTyp
+                | _ -> raisef ViewTypecheckException "NULLIF expects exactly two arguments"
+            | Some(FRSpecial SQL.SFLeast)
+            | Some(FRSpecial SQL.SFGreatest)
+            | Some(FRSpecial SQL.SFCoalesce) ->
+                match unionTypes args with
+                | Some ret -> ret
+                | None -> raisef ViewTypecheckException "Cannot unify values of different types"
+            | None -> raisef ViewTypecheckException "Unknown function"
     with e ->
         raisefWithInner
             ViewTypecheckException

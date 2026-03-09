@@ -205,6 +205,36 @@ let private getSingleRowQuery (viewExpr: CompiledViewExpr) : (ColumnType[] * SQL
 
         Some(colTypes, select)
 
+let private stripTopLevelLimitOffset (select: SQL.SelectExpr) : SQL.SelectExpr =
+    let tree =
+        match select.Tree with
+        | SQL.SSelect query ->
+            let orderLimit =
+                { query.OrderLimit with
+                    Limit = None
+                    Offset = None }
+
+            SQL.SSelect
+                { query with
+                    OrderLimit = orderLimit }
+        | SQL.SSetOp setOp ->
+            let orderLimit =
+                { setOp.OrderLimit with
+                    Limit = None
+                    Offset = None }
+
+            SQL.SSetOp
+                { setOp with
+                    OrderLimit = orderLimit }
+        | (SQL.SValues _ as values) -> values
+
+    { select with
+        Tree = tree }
+
+let private getTotalRowsCountQuery (rowsQuery: SQL.SelectExpr) : string =
+    let fullQuery = stripTopLevelLimitOffset rowsQuery
+    sprintf "SELECT count(*) FROM (%s) AS __request_lines_number" (fullQuery.ToSQLString())
+
 let private parseAttributesResult
     (columns: ColumnType[])
     (values: (SQL.SQLName * SQL.SimpleValueType * SQL.Value)[])
@@ -466,55 +496,97 @@ let runViewExpr
 
             do! setPragmas connection viewExpr.Pragmas cancellationToken
 
-            let! attrsResult =
+            let emptyAttrsResult =
+                { Attributes = Map.empty
+                  AttributeTypes = Map.empty
+                  ColumnAttributes = Map.empty
+                  ArgumentAttributes = Map.empty }
+
+            let getAttrsResult attrsParameters =
                 task {
                     match getSingleRowQuery viewExpr with
-                    | None ->
-                        return
-                            { Attributes = Map.empty
-                              AttributeTypes = Map.empty
-                              ColumnAttributes = Map.empty
-                              ArgumentAttributes = Map.empty }
+                    | None -> return emptyAttrsResult
                     | Some(colTypes, query) ->
                         match!
-                            connection.ExecuteRowValuesQuery (prefix + string query) parameters cancellationToken
+                            connection.ExecuteRowValuesQuery (prefix + string query) attrsParameters cancellationToken
                         with
                         | None -> return failwith "Unexpected empty query result"
                         | Some row -> return parseAttributesResult colTypes row
                 }
 
-            let getColumnInfo (col: ExecutedColumnInfo) =
-                let attributeTypes =
+            let mergeResults attrsResult info rows =
+                let getColumnInfo (col: ExecutedColumnInfo) =
+                    let attributeTypes =
+                        match Map.tryFind col.Name attrsResult.ColumnAttributes with
+                        | None -> Map.empty
+                        | Some(attrTypes, attrs) -> attrTypes
+
+                    { col with
+                        AttributeTypes = attributeTypes }
+
+                let getColumnAttributes (col: ExecutedColumnInfo) =
                     match Map.tryFind col.Name attrsResult.ColumnAttributes with
                     | None -> Map.empty
-                    | Some(attrTypes, attrs) -> attrTypes
+                    | Some(attrTypes, attrs) -> attrs
 
-                { col with
-                    AttributeTypes = attributeTypes }
+                let mergedInfo =
+                    { info with
+                        ArgumentAttributeTypes = Map.map (fun name -> fst) attrsResult.ArgumentAttributes
+                        AttributeTypes = attrsResult.AttributeTypes
+                        Columns = Array.map getColumnInfo info.Columns }
 
-            let getColumnAttributes (col: ExecutedColumnInfo) =
-                match Map.tryFind col.Name attrsResult.ColumnAttributes with
-                | None -> Map.empty
-                | Some(attrTypes, attrs) -> attrs
+                let result =
+                    { Attributes = attrsResult.Attributes
+                      ColumnAttributes = Array.map getColumnAttributes info.Columns
+                      ArgumentAttributes = Map.map (fun name -> snd) attrsResult.ArgumentAttributes
+                      Rows = rows }
+
+                processFunc mergedInfo result
 
             let! ret =
-                connection.ExecuteQuery (prefix + viewExpr.Query.Expression.ToSQLString()) parameters cancellationToken
-                <| fun resultColumns rawRows ->
-                    parseResult viewExpr.MainRootEntity viewExpr.Domains viewExpr.Columns resultColumns rawRows
-                    <| fun info rows ->
-                        let mergedInfo =
-                            { info with
-                                ArgumentAttributeTypes = Map.map (fun name -> fst) attrsResult.ArgumentAttributes
-                                AttributeTypes = attrsResult.AttributeTypes
-                                Columns = Array.map getColumnInfo info.Columns }
+                match viewExpr.RequestLinesNumberPlaceholderId with
+                | None ->
+                    task {
+                        let! attrsResult = getAttrsResult parameters
 
-                        let result =
-                            { Attributes = attrsResult.Attributes
-                              ColumnAttributes = Array.map getColumnAttributes info.Columns
-                              ArgumentAttributes = Map.map (fun name -> snd) attrsResult.ArgumentAttributes
-                              Rows = rows }
+                        return!
+                            connection.ExecuteQuery
+                                (prefix + viewExpr.Query.Expression.ToSQLString())
+                                parameters
+                                cancellationToken
+                            <| fun resultColumns rawRows ->
+                                parseResult viewExpr.MainRootEntity viewExpr.Domains viewExpr.Columns resultColumns rawRows
+                                <| fun info rows -> mergeResults attrsResult info rows
+                    }
+                | Some placeholderId ->
+                    task {
+                        let countQuery = getTotalRowsCountQuery viewExpr.Query.Expression
 
-                        processFunc mergedInfo result
+                        let! countResult =
+                            connection.ExecuteValueQuery (prefix + countQuery) parameters cancellationToken
+
+                        let totalRows =
+                            match countResult with
+                            | Some(_, _, v) -> SQL.parseIntValue v |> int
+                            | None -> failwith "Unexpected empty count query result"
+
+                        let! (info, rowsArr) =
+                            connection.ExecuteQuery
+                                (prefix + viewExpr.Query.Expression.ToSQLString())
+                                parameters
+                                cancellationToken
+                            <| fun resultColumns rawRows ->
+                                parseResult viewExpr.MainRootEntity viewExpr.Domains viewExpr.Columns resultColumns rawRows
+                                <| fun info rows ->
+                                    task {
+                                        let! rowsArr = rows.ToArrayAsync(cancellationToken)
+                                        return (info, rowsArr)
+                                    }
+
+                        let attrsParameters = Map.add placeholderId (SQL.VInt totalRows) parameters
+                        let! attrsResult = getAttrsResult attrsParameters
+                        return! mergeResults attrsResult info (rowsArr.ToAsyncEnumerable())
+                    }
 
             do! unsetPragmas connection viewExpr.Pragmas cancellationToken
             return ret
@@ -567,6 +639,10 @@ let explainViewExpr
                     maybeArguments
 
             let parameters = prepareArguments viewExpr.Query.Arguments arguments
+            let parameters =
+                match viewExpr.RequestLinesNumberPlaceholderId with
+                | None -> parameters
+                | Some placeholderId -> Map.add placeholderId (SQL.VInt 0) parameters
 
             do! setPragmas connection viewExpr.Pragmas cancellationToken
 

@@ -19,6 +19,7 @@ open OzmaDB.Attributes.Merge
 module SQL = OzmaDB.SQL.Utils
 module SQL = OzmaDB.SQL.AST
 module SQL = OzmaDB.SQL.Rename
+module SQLA = OzmaDB.SQL.AST
 
 type DomainIdColumn = int
 
@@ -452,6 +453,7 @@ type CompiledPragmasMap = Map<SQL.ParameterName, SQL.Value>
 [<NoEquality; NoComparison>]
 type CompiledViewExpr =
     { Pragmas: CompiledPragmasMap
+      RequestLinesNumberPlaceholderId: int option
       SingleRowQuery: CompiledSingleRowExpr
       Query: Query<SQL.SelectExpr>
       UsedDatabase: FlatUsedDatabase
@@ -1070,6 +1072,7 @@ type private ExpandedFieldKey = DomainsTree<FromFieldKey>
 type CompilationFlags = { SubExprJoinNamespace: JoinNamespace }
 
 let defaultCompilationFlags = { SubExprJoinNamespace = rootJoinNamespace }
+let private requestLinesNumberFunction = OzmaQLName "request_lines_number"
 
 // Expects metadata:
 // * `FieldMeta` for all immediate FERefs in result expressions when meta columns are required;
@@ -1086,6 +1089,12 @@ type private QueryCompiler
     let mutable arguments = initialArguments
     let mutable usedDatabase = emptyUsedDatabase
     let mutable referenceArgumentCache: Map<string, SQL.SelectExpr> = Map.empty
+    let requestLinesNumberPlaceholderId = arguments.NextPlaceholderId
+
+    do
+        arguments <-
+            { arguments with
+                NextPlaceholderId = requestLinesNumberPlaceholderId + 1 }
 
     let replacer = NameReplacer()
 
@@ -2013,12 +2022,18 @@ type private QueryCompiler
 
                     SQL.VEFunc(SQL.SQLName "jsonb_build_object", args)
             | FEFunc(name, args) ->
-                let compArgs = Array.map traverse args
+                if name = requestLinesNumberFunction then
+                    if Array.isEmpty args then
+                        SQL.VEPlaceholder requestLinesNumberPlaceholderId
+                    else
+                        raisef QueryCompileException "request_lines_number() expects no arguments"
+                else
+                    let compArgs = Array.map traverse args
 
-                match Map.tryFind name allowedFunctions with
-                | None -> raisef QueryCompileException "Unknown function: %O" name
-                | Some(FRFunction name) -> SQL.VEFunc(name, compArgs)
-                | Some(FRSpecial special) -> SQL.VESpecialFunc(special, compArgs)
+                    match Map.tryFind name allowedFunctions with
+                    | None -> raisef QueryCompileException "Unknown function: %O" name
+                    | Some(FRFunction name) -> SQL.VEFunc(name, compArgs)
+                    | Some(FRSpecial special) -> SQL.VESpecialFunc(special, compArgs)
             | FEWindowFunc(name, args, window) ->
                 let compArgs = Array.map traverse args
                 let sqlName = Map.find name allowedWindowFunctions
@@ -3800,6 +3815,7 @@ type private QueryCompiler
 
     member this.UsedDatabase = usedDatabase
     member this.Arguments = arguments
+    member this.RequestLinesNumberPlaceholderId = requestLinesNumberPlaceholderId
 
 let rec private findSelectExprSingleRows
     (f: int -> SQL.ColumnName option -> SQL.ValueExpr -> 'b option)
@@ -3820,6 +3836,149 @@ and private findSelectSingleRows
     (select: SQL.SelectExpr)
     : 'b seq =
     findSelectExprSingleRows f select.Tree
+
+let rec private containsPlaceholderInValueExpr (placeholderId: int) (expr: SQLA.ValueExpr) : bool =
+    let mutable found = false
+
+    let rec checkSelectExpr (select: SQL.SelectExpr) =
+        findSelectSingleRows
+            (fun _ _ colExpr ->
+                if containsPlaceholderInValueExpr placeholderId colExpr then
+                    Some()
+                else
+                    None)
+            select
+        |> Seq.iter ignore
+
+    SQL.iterValueExpr
+        { SQL.idValueExprIter with
+            Placeholder =
+                (fun id ->
+                    if id = placeholderId then
+                        found <- true)
+            Query = checkSelectExpr }
+        expr
+
+    found
+
+let private iterOrderLimitClause (f: SQLA.ValueExpr -> unit) (clause: SQLA.OrderLimitClause) =
+    Option.iter f clause.Limit
+    Option.iter f clause.Offset
+    clause.OrderBy |> Array.iter (fun ord -> f ord.Expr)
+
+let rec private iterTableExprValues (f: SQLA.ValueExpr -> unit) : SQLA.TableExpr -> unit =
+    function
+    | SQLA.TESelect sel -> iterSelectExprValues f sel
+    | SQLA.TEFunc(_, args) -> Array.iter f args
+
+and private iterFromExprValues (f: SQLA.ValueExpr -> unit) : SQLA.FromExpr -> unit =
+    function
+    | SQLA.FTable _ -> ()
+    | SQLA.FTableExpr expr -> iterTableExprValues f expr.Expression
+    | SQLA.FJoin join ->
+        iterFromExprValues f join.A
+        iterFromExprValues f join.B
+        Option.iter f join.Condition
+
+and private iterSelectTreeValues (f: SQLA.ValueExpr -> unit) : SQLA.SelectTreeExpr -> unit =
+    function
+    | SQLA.SSelect query ->
+        query.Columns
+        |> Array.iter (function
+            | SQLA.SCAll _ -> ()
+            | SQLA.SCExpr(_, expr) -> f expr)
+
+        Option.iter (iterFromExprValues f) query.From
+        Option.iter f query.Where
+        Array.iter f query.GroupBy
+        iterOrderLimitClause f query.OrderLimit
+    | SQLA.SValues values -> values |> Array.iter (Array.iter f)
+    | SQLA.SSetOp setOp ->
+        iterSelectExprValues f setOp.A
+        iterSelectExprValues f setOp.B
+        iterOrderLimitClause f setOp.OrderLimit
+
+and private iterSelectExprValues (f: SQLA.ValueExpr -> unit) (select: SQLA.SelectExpr) : unit =
+    let iterCommonTableExpr (cte: SQLA.CommonTableExpr) = iterDataExprValues f cte.Expr
+
+    Option.iter
+        (fun (ctes: SQLA.CommonTableExprs) ->
+            ctes.Exprs |> Array.iter (fun (_, cte) -> iterCommonTableExpr cte))
+        select.CTEs
+
+    iterSelectTreeValues f select.Tree
+
+and private iterDataExprValues (f: SQLA.ValueExpr -> unit) : SQLA.DataExpr -> unit =
+    function
+    | SQLA.DESelect sel -> iterSelectExprValues f sel
+    | SQLA.DEInsert ins ->
+        Option.iter
+            (fun (ctes: SQLA.CommonTableExprs) ->
+                ctes.Exprs
+                |> Array.iter (fun (_, cte) -> iterDataExprValues f cte.Expr))
+            ins.CTEs
+
+        match ins.Source with
+        | SQLA.ISDefaultValues -> ()
+        | SQLA.ISSelect sel -> iterSelectExprValues f sel
+        | SQLA.ISValues vals ->
+            vals
+            |> Array.iter
+                (Array.iter (function
+                    | SQLA.IVDefault -> ()
+                    | SQLA.IVExpr expr -> f expr))
+
+        Option.iter
+            (fun (onConflict: SQLA.OnConflictExpr) ->
+                match onConflict.Action with
+                | SQLA.CANothing -> ()
+                | SQLA.CAUpdate upd ->
+                    upd.Assignments
+                    |> Array.iter (function
+                        | SQLA.UAESet(_, insValue) ->
+                            match insValue with
+                            | SQLA.IVDefault -> ()
+                            | SQLA.IVExpr expr -> f expr
+                        | SQLA.UAESelect(_, sel) -> iterSelectExprValues f sel)
+
+                    Option.iter f upd.Where)
+            ins.OnConflict
+    | SQLA.DEUpdate upd ->
+        Option.iter
+            (fun (ctes: SQLA.CommonTableExprs) ->
+                ctes.Exprs
+                |> Array.iter (fun (_, cte) -> iterDataExprValues f cte.Expr))
+            upd.CTEs
+
+        upd.Assignments
+        |> Array.iter (function
+            | SQLA.UAESet(_, insValue) ->
+                match insValue with
+                | SQLA.IVDefault -> ()
+                | SQLA.IVExpr expr -> f expr
+            | SQLA.UAESelect(_, sel) -> iterSelectExprValues f sel)
+
+        Option.iter (iterFromExprValues f) upd.From
+        Option.iter f upd.Where
+    | SQLA.DEDelete del ->
+        Option.iter
+            (fun (ctes: SQLA.CommonTableExprs) ->
+                ctes.Exprs
+                |> Array.iter (fun (_, cte) -> iterDataExprValues f cte.Expr))
+            del.CTEs
+
+        Option.iter (iterFromExprValues f) del.Using
+        Option.iter f del.Where
+
+let private containsPlaceholderInSelect (placeholderId: int) (select: SQLA.SelectExpr) : bool =
+    let mutable found = false
+
+    let check expr =
+        if not found && containsPlaceholderInValueExpr placeholderId expr then
+            found <- true
+
+    iterSelectExprValues check select
+    found
 
 let rec private filterSelectExprColumns (f: int -> bool) : SQL.SelectTreeExpr -> SQL.SelectTreeExpr =
     function
@@ -3972,11 +4131,19 @@ let compileViewExpr
     let columnIsPerRow i = columnInfoIsPerRow allColumns.[i]
     let perRowExpr = filterSelectColumns columnIsPerRow expr
     let perRowColumns = Array.filter columnInfoIsPerRow allColumns
+    let requestLinesNumberPlaceholderId = compiler.RequestLinesNumberPlaceholderId
+
+    if containsPlaceholderInSelect requestLinesNumberPlaceholderId perRowExpr then
+        raisef QueryCompileException "request_lines_number() can only be used in non per-row attributes"
 
     let allNonPerRowColumns = Seq.append argAttrs nonPerRowColumns
 
     let (constColumns, singleRowColumns) =
         Seq.partition (fst >> columnIsConst) allNonPerRowColumns
+
+    let usesRequestLinesNumber =
+        allNonPerRowColumns
+        |> Seq.exists (snd >> containsPlaceholderInValueExpr requestLinesNumberPlaceholderId)
 
     let attrQuery =
         { CTEs = expr.CTEs
@@ -3996,6 +4163,11 @@ let compileViewExpr
             Some mainEntity.Root
 
     { Pragmas = Map.mapWithKeys compilePragma viewExpr.Pragmas
+      RequestLinesNumberPlaceholderId =
+        if usesRequestLinesNumber then
+            Some requestLinesNumberPlaceholderId
+        else
+            None
       SingleRowQuery = attrQuery
       Query =
         { Expression = perRowExpr
