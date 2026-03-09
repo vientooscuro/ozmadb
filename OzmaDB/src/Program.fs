@@ -426,11 +426,10 @@ let private setupEventLogger (webAppBuilder: WebApplicationBuilder) =
 
     let getEventLogger (sp: IServiceProvider) =
         let logFactory = sp.GetRequiredService<ILoggerFactory>()
+
         let settings =
-            { QueueCapacity =
-                eventLoggerSection.GetValue("QueueCapacity", defaultEventLoggerSettings.QueueCapacity)
-              MaxFieldLength =
-                eventLoggerSection.GetValue("MaxFieldLength", defaultEventLoggerSettings.MaxFieldLength)
+            { QueueCapacity = eventLoggerSection.GetValue("QueueCapacity", defaultEventLoggerSettings.QueueCapacity)
+              MaxFieldLength = eventLoggerSection.GetValue("MaxFieldLength", defaultEventLoggerSettings.MaxFieldLength)
               WriteEventSampleRate =
                 eventLoggerSection.GetValue("WriteEventSampleRate", defaultEventLoggerSettings.WriteEventSampleRate) }
 
@@ -485,8 +484,7 @@ let private setupInstancesCache (webAppBuilder: WebApplicationBuilder) =
     let jsWriteEventSettings =
         { Enabled = jsEventsSection.GetValue("Enabled", defaultJSWriteEventSettings.Enabled)
           SampleRate = jsEventsSection.GetValue("SampleRate", defaultJSWriteEventSettings.SampleRate)
-          MaxRequestLength =
-            jsEventsSection.GetValue("MaxRequestLength", defaultJSWriteEventSettings.MaxRequestLength)
+          MaxRequestLength = jsEventsSection.GetValue("MaxRequestLength", defaultJSWriteEventSettings.MaxRequestLength)
           LogDetails = jsEventsSection.GetValue("LogDetails", defaultJSWriteEventSettings.LogDetails) }
 
     let jsHostSettings =

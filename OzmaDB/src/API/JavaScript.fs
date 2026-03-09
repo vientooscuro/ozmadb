@@ -458,12 +458,15 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
 
     let shouldWriteEvent =
         let sampleRate = clampSampleRate writeEventSettings.SampleRate
+
         fun () ->
             writeEventSettings.Enabled
             && (sampleRate >= 1.0 || Random.Shared.NextDouble() <= sampleRate)
 
     let buildWriteEventPayload (details: JToken) =
-        let detailsString = maybeTruncate writeEventSettings.MaxRequestLength (details.ToString(Formatting.None))
+        let detailsString =
+            maybeTruncate writeEventSettings.MaxRequestLength (details.ToString(Formatting.None))
+
         JsonConvert.SerializeObject({| details = detailsString |}, Formatting.None)
 
     do
@@ -695,6 +698,7 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
         this.WrapHostFunction
         <| fun () ->
             let req = this.Deserialize arg: WriteEventRequest
+
             if not <| shouldWriteEvent () then
                 Undefined.Value
             else

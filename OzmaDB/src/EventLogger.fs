@@ -29,20 +29,30 @@ type EventLogger(loggerFactory: ILoggerFactory, settings: EventLoggerSettings) =
 
     let queueCapacity = max 1 settings.QueueCapacity
     let boundedOptions = BoundedChannelOptions(queueCapacity)
+
     do
         boundedOptions.SingleReader <- true
         boundedOptions.SingleWriter <- false
         boundedOptions.FullMode <- BoundedChannelFullMode.DropOldest
+
     let chan = Channel.CreateBounded<string * EventEntry>(boundedOptions)
     let logger = loggerFactory.CreateLogger<EventLogger>()
+
     let sampleRate =
-        if Double.IsNaN(settings.WriteEventSampleRate) || Double.IsInfinity(settings.WriteEventSampleRate) then
+        if
+            Double.IsNaN(settings.WriteEventSampleRate)
+            || Double.IsInfinity(settings.WriteEventSampleRate)
+        then
             1.0
         else
             min 1.0 (max 0.0 settings.WriteEventSampleRate)
 
     let truncateString (value: string) =
-        if settings.MaxFieldLength <= 0 || String.IsNullOrEmpty(value) || value.Length <= settings.MaxFieldLength then
+        if
+            settings.MaxFieldLength <= 0
+            || String.IsNullOrEmpty(value)
+            || value.Length <= settings.MaxFieldLength
+        then
             value
         else
             value.Substring(0, settings.MaxFieldLength) + "...[truncated]"
@@ -66,6 +76,7 @@ type EventLogger(loggerFactory: ILoggerFactory, settings: EventLoggerSettings) =
             match p.GetValue(entry) with
             | :? string as v when not <| String.IsNullOrEmpty(v) ->
                 let next = truncateString v
+
                 if not <| obj.ReferenceEquals(v, next) then
                     p.SetValue(entry, next)
             | _ -> ()
@@ -86,7 +97,9 @@ type EventLogger(loggerFactory: ILoggerFactory, settings: EventLoggerSettings) =
         | None -> false
 
     let shouldKeep (entry: EventEntry) =
-        not (isWriteEvent entry) || sampleRate >= 1.0 || Random.Shared.NextDouble() <= sampleRate
+        not (isWriteEvent entry)
+        || sampleRate >= 1.0
+        || Random.Shared.NextDouble() <= sampleRate
 
     override this.ExecuteAsync(cancellationToken: CancellationToken) : Task =
         task {
