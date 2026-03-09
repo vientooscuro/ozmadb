@@ -281,6 +281,8 @@ type private StaticInstance
 
         member this.SetExtraConnectionOptions(builder: NpgsqlConnectionStringBuilder) =
             builder.CommandTimeout <- 0
+            builder.ConnectionIdleLifetime <- 30
+            builder.MaxAutoPrepare <- 50
             ()
 
 let private appEndpoints (serviceProvider: IServiceProvider) : Endpoint list =
@@ -418,11 +420,21 @@ let private setupJSON (webAppBuilder: WebApplicationBuilder) =
     <| webAppBuilder.Services.AddSingleton<Json.ISerializer>(NewtonsoftJson.Serializer defaultJsonSettings)
 
 let private setupEventLogger (webAppBuilder: WebApplicationBuilder) =
+    let ozmadbSection = webAppBuilder.Configuration.GetSection("OzmaDB")
+    let eventLoggerSection = ozmadbSection.GetSection("EventLogger")
     let services = webAppBuilder.Services
 
     let getEventLogger (sp: IServiceProvider) =
         let logFactory = sp.GetRequiredService<ILoggerFactory>()
-        new EventLogger(logFactory)
+        let settings =
+            { QueueCapacity =
+                eventLoggerSection.GetValue("QueueCapacity", defaultEventLoggerSettings.QueueCapacity)
+              MaxFieldLength =
+                eventLoggerSection.GetValue("MaxFieldLength", defaultEventLoggerSettings.MaxFieldLength)
+              WriteEventSampleRate =
+                eventLoggerSection.GetValue("WriteEventSampleRate", defaultEventLoggerSettings.WriteEventSampleRate) }
+
+        new EventLogger(logFactory, settings)
     // https://stackoverflow.com/a/59089881
     ignore <| services.AddSingleton<EventLogger>(getEventLogger)
 
@@ -445,6 +457,7 @@ let private setupInstancesCache (webAppBuilder: WebApplicationBuilder) =
 
     let jsHttpSection = ozmadbSection.GetSection("JavaScript").GetSection("Http")
     let jsOutboxSection = ozmadbSection.GetSection("JavaScript").GetSection("Outbox")
+    let jsEventsSection = ozmadbSection.GetSection("JavaScript").GetSection("Events")
 
     let allowedHosts =
         jsHttpSection.GetSection("AllowedHosts").GetChildren()
@@ -469,9 +482,17 @@ let private setupInstancesCache (webAppBuilder: WebApplicationBuilder) =
           RetryBaseDelayMs = jsOutboxSection.GetValue("RetryBaseDelayMs", 500)
           MaxBodyBytes = jsOutboxSection.GetValue("MaxBodyBytes", 256 * 1024) }
 
+    let jsWriteEventSettings =
+        { Enabled = jsEventsSection.GetValue("Enabled", defaultJSWriteEventSettings.Enabled)
+          SampleRate = jsEventsSection.GetValue("SampleRate", defaultJSWriteEventSettings.SampleRate)
+          MaxRequestLength =
+            jsEventsSection.GetValue("MaxRequestLength", defaultJSWriteEventSettings.MaxRequestLength)
+          LogDetails = jsEventsSection.GetValue("LogDetails", defaultJSWriteEventSettings.LogDetails) }
+
     let jsHostSettings =
         { HttpPolicy = jsHttpPolicy
-          Outbox = jsOutboxSettings }
+          Outbox = jsOutboxSettings
+          Events = jsWriteEventSettings }
 
     let makeInstancesStore (sp: IServiceProvider) =
         let cacheParams =

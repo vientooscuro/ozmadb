@@ -34,9 +34,17 @@ type JSOutboxSettings =
       MaxBodyBytes: int }
 
 [<NoComparison; NoEquality>]
+type JSWriteEventSettings =
+    { Enabled: bool
+      SampleRate: float
+      MaxRequestLength: int
+      LogDetails: bool }
+
+[<NoComparison; NoEquality>]
 type JSHostSettings =
     { HttpPolicy: OutboundHttpPolicy
-      Outbox: JSOutboxSettings }
+      Outbox: JSOutboxSettings
+      Events: JSWriteEventSettings }
 
 let defaultJSOutboxSettings =
     { Enabled = true
@@ -46,9 +54,16 @@ let defaultJSOutboxSettings =
       RetryBaseDelayMs = 500
       MaxBodyBytes = 256 * 1024 }
 
+let defaultJSWriteEventSettings =
+    { Enabled = true
+      SampleRate = 1.0
+      MaxRequestLength = 4096
+      LogDetails = false }
+
 let defaultJSHostSettings =
     { HttpPolicy = defaultOutboundHttpPolicy
-      Outbox = defaultJSOutboxSettings }
+      Outbox = defaultJSOutboxSettings
+      Events = defaultJSWriteEventSettings }
 
 [<SerializeAsObject("error")>]
 type APICallErrorInfo =
@@ -127,6 +142,7 @@ let private preludeSource =
     const objectAssign = Object.assign;
     const objectFreeze = Object.freeze;
     const arrayMap = Array.prototype.map;
+    let mutedEventsDepth = 0;
 
     const findInnerByKey = (object, key) => {
         for (const value of objectValues(object)) {
@@ -264,6 +280,68 @@ let private preludeSource =
             return apiProxy.RunCommand({ command, args });
         };
 
+        runTransaction(operations) {
+            return apiProxy.RunTransaction({ operations });
+        };
+
+        async updateEntries(entity, updates, chunkSize = 200) {
+            const rows = Array.isArray(updates) ? updates : [];
+            if (!rows.length) return { results: [] };
+            const size = Number.isInteger(chunkSize) && chunkSize > 0 ? chunkSize : 200;
+            const results = [];
+            for (let i = 0; i < rows.length; i += size) {
+                const chunk = rows.slice(i, i + size);
+                const operations = arrayMap.call(chunk, row => ({
+                    type: 'update',
+                    entity,
+                    id: row.id,
+                    fields: row.fields ?? row.values ?? {},
+                }));
+                const tx = await this.runTransaction(operations);
+                results.push(...tx.results);
+            }
+            return { results };
+        };
+
+        async deleteEntries(entity, ids, chunkSize = 200) {
+            const rows = Array.isArray(ids) ? ids : [];
+            if (!rows.length) return { results: [] };
+            const size = Number.isInteger(chunkSize) && chunkSize > 0 ? chunkSize : 200;
+            const results = [];
+            for (let i = 0; i < rows.length; i += size) {
+                const chunk = rows.slice(i, i + size);
+                const operations = arrayMap.call(chunk, id => ({ type: 'delete', entity, id }));
+                const tx = await this.runTransaction(operations);
+                results.push(...tx.results);
+            }
+            return { results };
+        };
+
+        async getEntriesByIds(entity, ids, columns) {
+            const idList = Array.isArray(ids) ? ids.filter(id => id !== null && id !== undefined) : [];
+            if (!idList.length) return [];
+
+            const colsRaw = Array.isArray(columns) && columns.length ? columns : ['id'];
+            const cols = arrayMap.call(colsRaw, c => formatOzmaQLName(String(c))).join(', ');
+            const idsExpr = arrayMap.call(idList, id => formatOzmaQLValue(id)).join(', ');
+            const schema = formatOzmaQLName(entity.schema);
+            const name = formatOzmaQLName(entity.name);
+            const idField = formatOzmaQLName('id');
+            const query = `SELECT ${cols} FROM ${schema}.${name} WHERE ${idField} IN (${idsExpr})`;
+
+            const exprResult = await this.getUserView({ type: 'anonymous', query });
+            const result = [];
+            for (const row of exprResult.result.rows) {
+                const item = {};
+                for (let i = 0; i < row.values.length; i++) {
+                    const fieldName = exprResult.info.columns[i].name;
+                    item[fieldName] = row.values[i].value;
+                }
+                result.push(item);
+            }
+            return result;
+        };
+
         deferConstraints(func) {
             return apiProxy.DeferConstraints(func);
         };
@@ -276,11 +354,26 @@ let private preludeSource =
             return apiProxy.GetDomainValues({ entity, id, chunk });
         };
 
+        muteEvents(muted = true) {
+            mutedEventsDepth = muted ? 1 : 0;
+        };
+
+        async withMutedEvents(func) {
+            mutedEventsDepth += 1;
+            try {
+                return await func();
+            } finally {
+                mutedEventsDepth = Math.max(0, mutedEventsDepth - 1);
+            }
+        };
+
         writeEvent(details) {
+            if (mutedEventsDepth > 0) return undefined;
             return apiProxy.WriteEvent({ details });
         };
 
         writeEventSync(details) {
+            if (mutedEventsDepth > 0) return undefined;
             return apiProxy.WriteEventSync({ details });
         };
 
@@ -349,6 +442,29 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
     let apiHandle = AsyncLocal<APIHandle>()
     let httpPolicy = normalizePolicy settings.HttpPolicy
     let outboxSettings = settings.Outbox
+    let writeEventSettings = settings.Events
+
+    let clampSampleRate sampleRate =
+        if Double.IsNaN(sampleRate) || Double.IsInfinity(sampleRate) then
+            1.0
+        else
+            min 1.0 (max 0.0 sampleRate)
+
+    let maybeTruncate (maxLen: int) (value: string) =
+        if maxLen <= 0 || String.IsNullOrEmpty(value) || value.Length <= maxLen then
+            value
+        else
+            value.Substring(0, maxLen) + "...[truncated]"
+
+    let shouldWriteEvent =
+        let sampleRate = clampSampleRate writeEventSettings.SampleRate
+        fun () ->
+            writeEventSettings.Enabled
+            && (sampleRate >= 1.0 || Random.Shared.NextDouble() <= sampleRate)
+
+    let buildWriteEventPayload (details: JToken) =
+        let detailsString = maybeTruncate writeEventSettings.MaxRequestLength (details.ToString(Formatting.None))
+        JsonConvert.SerializeObject({| details = detailsString |}, Formatting.None)
 
     do
         this.Engine.AddHostObject("unwrappedApiProxy", this)
@@ -571,39 +687,54 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
         this.SimpleApiCall arg (fun handle -> handle.API.Domains.GetDomainValues)
 
     [<ScriptUsage(ScriptAccess.Full)>]
+    member this.RunTransaction arg =
+        this.SimpleApiCall arg (fun handle -> handle.API.Entities.RunTransaction)
+
+    [<ScriptUsage(ScriptAccess.Full)>]
     member this.WriteEvent(arg: obj) =
         this.WrapHostFunction
         <| fun () ->
             let req = this.Deserialize arg: WriteEventRequest
-            let handle = this.GetHandle()
+            if not <| shouldWriteEvent () then
+                Undefined.Value
+            else
+                let handle = this.GetHandle()
+                let payload = buildWriteEventPayload req.Details
 
-            handle.Logger.LogInformation(
-                "Source {source} wrote event from JavaScript: {details}",
-                handle.API.Request.Source,
-                req.Details.ToString()
-            )
+                if writeEventSettings.LogDetails then
+                    handle.Logger.LogInformation(
+                        "Source {source} wrote event from JavaScript: {details}",
+                        handle.API.Request.Source,
+                        payload
+                    )
 
-            handle.API.Request.WriteEvent(fun event ->
-                event.Type <- "writeEvent"
-                event.Request <- JsonConvert.SerializeObject req)
+                handle.API.Request.WriteEvent(fun event ->
+                    event.Type <- "writeEvent"
+                    event.Request <- payload)
 
-            Undefined.Value
+                Undefined.Value
 
     [<ScriptUsage(ScriptAccess.Full)>]
     member this.WriteEventSync(arg: obj) =
         let req = this.Deserialize arg: WriteEventRequest
 
-        this.RunVoidApiCall
-        <| fun handle ->
-            handle.Logger.LogInformation(
-                "Source {source} wrote sync event from JavaScript: {details}",
-                handle.API.Request.Source,
-                req.Details.ToString()
-            )
+        if shouldWriteEvent () then
+            this.RunVoidApiCall
+            <| fun handle ->
+                let payload = buildWriteEventPayload req.Details
 
-            handle.API.Request.WriteEventSync(fun event ->
-                event.Type <- "writeEvent"
-                event.Request <- JsonConvert.SerializeObject req)
+                if writeEventSettings.LogDetails then
+                    handle.Logger.LogInformation(
+                        "Source {source} wrote sync event from JavaScript: {details}",
+                        handle.API.Request.Source,
+                        payload
+                    )
+
+                handle.API.Request.WriteEventSync(fun event ->
+                    event.Type <- "writeEvent"
+                    event.Request <- payload)
+        else
+            Task.CompletedTask
 
     [<ScriptUsage(ScriptAccess.Full)>]
     member this.HttpRequest(arg: obj) =
