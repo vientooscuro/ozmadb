@@ -232,18 +232,13 @@ let private getTotalRowsCountQuery (rowsQuery: SQL.SelectExpr) : string =
 
 let private requestLinesRowAttributeName = OzmaQLName "__request_lines_number"
 let private requestLinesRowColumnName = SQL.SQLName "__request_lines_number"
-let private requestLinesHasRowAttributeName = OzmaQLName "__request_lines_has_row"
-let private requestLinesHasRowColumnName = SQL.SQLName "__request_lines_has_row"
 
 let private getRequestLinesRowsQuery (baseExpr: SQL.SelectExpr) (rowsExpr: SQL.SelectExpr) : string =
     sprintf
-        "WITH __request_lines_base AS (%s), __request_lines_chunk AS (%s) SELECT __request_lines_meta.total AS %s, __request_lines_rows.%s AS %s, __request_lines_rows.* FROM (SELECT count(*)::integer AS total FROM __request_lines_base) __request_lines_meta LEFT JOIN LATERAL (SELECT true AS %s, __request_lines_chunk.* FROM __request_lines_chunk) __request_lines_rows ON true"
+        "WITH __request_lines_base AS (%s), __request_lines_chunk AS (%s) SELECT __request_lines_meta.total AS %s, __request_lines_chunk.* FROM __request_lines_chunk CROSS JOIN (SELECT count(*)::integer AS total FROM __request_lines_base) __request_lines_meta"
         (baseExpr.ToSQLString())
         (rowsExpr.ToSQLString())
         (string requestLinesRowColumnName)
-        (string requestLinesHasRowColumnName)
-        (string requestLinesHasRowColumnName)
-        (string requestLinesHasRowColumnName)
 
 let private parseAttributesResult
     (columns: ColumnType[])
@@ -586,14 +581,7 @@ let runViewExpr
                               Info = emptyColumnMetaInfo }
                             : CompiledColumnInfo
 
-                        let requestLinesHasRowColumnInfo =
-                            { Type = CTMeta(CMRowAttribute requestLinesHasRowAttributeName)
-                              Name = requestLinesHasRowColumnName
-                              Info = emptyColumnMetaInfo }
-                            : CompiledColumnInfo
-
-                        let queryColumns =
-                            Array.append [| requestLinesColumnInfo; requestLinesHasRowColumnInfo |] viewExpr.Columns
+                        let queryColumns = Array.append [| requestLinesColumnInfo |] viewExpr.Columns
 
                         let! (info, rowsArr) =
                             connection.ExecuteQuery (prefix + rowsQuery) parameters cancellationToken
@@ -605,34 +593,44 @@ let runViewExpr
                                         return (info, rowsArr)
                                     }
 
-                        let totalRows =
-                            rowsArr
-                            |> Array.tryHead
-                            |> Option.bind (fun row -> Map.tryFind requestLinesRowAttributeName row.Attributes)
-                            |> Option.map SQL.parseSmallIntValue
-                            |> Option.defaultValue 0
+                        let! totalRows =
+                            match rowsArr |> Array.tryHead with
+                            | Some row ->
+                                task {
+                                    return
+                                        row.Attributes
+                                        |> Map.tryFind requestLinesRowAttributeName
+                                        |> Option.map SQL.parseSmallIntValue
+                                        |> Option.defaultValue 0
+                                }
+                            | None ->
+                                task {
+                                    let countQuery = getTotalRowsCountQuery baseExpr
+
+                                    let! countRow =
+                                        connection.ExecuteRowValuesQuery
+                                            (prefix + countQuery)
+                                            parameters
+                                            cancellationToken
+
+                                    match countRow with
+                                    | None -> return failwith "Unexpected empty request_lines_number count result"
+                                    | Some values ->
+                                        match values |> Array.tryHead with
+                                        | None ->
+                                            return failwith "Unexpected empty request_lines_number count row columns"
+                                        | Some(_, _, value) -> return SQL.parseSmallIntValue value
+                                }
 
                         let info =
                             { info with
                                 RowAttributeTypes = Map.remove requestLinesRowAttributeName info.RowAttributeTypes }
 
-                        let info =
-                            { info with
-                                RowAttributeTypes = Map.remove requestLinesHasRowAttributeName info.RowAttributeTypes }
-
                         let rowsArr =
                             rowsArr
-                            |> Array.filter (fun row ->
-                                row.Attributes
-                                |> Map.tryFind requestLinesHasRowAttributeName
-                                |> Option.map SQL.parseBoolValue
-                                |> Option.defaultValue false)
                             |> Array.map (fun row ->
                                 { row with
-                                    Attributes =
-                                        row.Attributes
-                                        |> Map.remove requestLinesRowAttributeName
-                                        |> Map.remove requestLinesHasRowAttributeName })
+                                    Attributes = row.Attributes |> Map.remove requestLinesRowAttributeName })
 
                         let attrsParameters = Map.add placeholderId (SQL.VInt totalRows) parameters
                         let! attrsResult = getAttrsResult attrsParameters
