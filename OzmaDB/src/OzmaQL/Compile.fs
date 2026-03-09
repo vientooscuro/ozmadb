@@ -4136,8 +4136,12 @@ let compileViewExpr
 
     let allNonPerRowColumns = Seq.append argAttrs nonPerRowColumns
 
+    let isConstNonPerRowColumn (info, expr) =
+        columnIsConst info
+        && not (containsPlaceholderInValueExpr requestLinesNumberPlaceholderId expr)
+
     let (constColumns, singleRowColumns) =
-        Seq.partition (fst >> columnIsConst) allNonPerRowColumns
+        Seq.partition isConstNonPerRowColumn allNonPerRowColumns
 
     let usesRequestLinesNumber =
         allNonPerRowColumns
