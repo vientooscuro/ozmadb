@@ -3590,7 +3590,18 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                 | Cross -> isInner
                 | _ -> false
 
-            let (infoB, newB) = resolveFromExpr ctx infoA isInner2 flags join.B
+            let (infoB, newB) =
+                try
+                    resolveFromExpr ctx infoA isInner2 flags join.B
+                with :? QueryResolveException as e when
+                    join.Type = Cross
+                    && e.Message.StartsWith("Unknown field:")
+                    ->
+                    match join.B with
+                    | FTableExpr tab when not tab.Lateral ->
+                        let lateralTab = { tab with Lateral = true }
+                        resolveFromExpr ctx infoA isInner2 flags (FTableExpr lateralTab)
+                    | _ -> reraise ()
 
             let localCtx = addFromToContext infoB ctx
 
