@@ -51,7 +51,7 @@ let private convertRateLimit (rate: RateLimit) : RateLimitRule =
         Endpoint = "*",
         Limit = rate.Limit,
         Period = string rate.Period,
-        PeriodTimespan = TimeSpan.FromSeconds(rate.Period)
+        PeriodTimespan = TimeSpan.FromSeconds(int64 rate.Period)
     )
 
 type ContextRateLimitProcessor

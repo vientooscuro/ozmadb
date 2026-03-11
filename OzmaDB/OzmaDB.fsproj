@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <Version>0.0.9</Version>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
 
     <!-- Store generated parsers in intermediate build directory -->
