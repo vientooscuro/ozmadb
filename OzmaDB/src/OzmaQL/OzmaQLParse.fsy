@@ -168,6 +168,11 @@ let private addOrderLimitClause (orderLimit : ParsedOrderLimitClause) : ParsedSe
     | SValues _ -> failwith "RDER BY and LIMIT/OFFSET support for VALUES is not implemented"
     | SSetOp op -> SSetOp { op with OrderLimit = orderLimit }
 
+let private parseIntervalLiteral (value : string) : FieldValue =
+    match OzmaDB.SQL.Utils.trySqlInterval value with
+    | Some interval -> FInterval interval
+    | None -> failwithf "Invalid interval literal: %s" value
+
 %}
 
 // Atoms
@@ -951,6 +956,7 @@ Value:
     | MINUS INT                              { FInt (-$2) }
     | MINUS DECIMAL                          { FDecimal (-$2) }
     | STRING                                 { FString $1 }
+    | INTERVAL_TYPE STRING                   { parseIntervalLiteral $2 }
     | BOOL                                   { FBool $1 }
     | UserViewRef                            { FUserViewRef $1 }
     | ARRAY LEFT_BRACKET Array RIGHT_BRACKET { $3 }
