@@ -2919,12 +2919,14 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                 (emptyCondTypeContexts, FEJsonObject newObj)
             | FEFunc(name, args) ->
                 let newArgs = Array.map (traverse outerTypeCtxs >> snd) args
+
                 if name = currentThemeFunction then
                     exprInfo <-
                         { exprInfo with
                             Flags =
                                 { exprInfo.Flags with
                                     HasArguments = true } }
+
                 (emptyCondTypeContexts, FEFunc(name, newArgs))
             | FEWindowFunc(name, args, window) ->
                 exprInfo <-
