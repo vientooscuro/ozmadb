@@ -34,7 +34,10 @@ type OutboxWorker
     inherit BackgroundService()
 
     let logger = loggerFactory.CreateLogger<OutboxWorker>()
-    let pollDelay = TimeSpan.FromMilliseconds(max 100 settings.PollDelayMs)
+
+    let pollDelay: TimeSpan =
+        TimeSpan.FromMilliseconds(int64 (max 100 settings.PollDelayMs))
+
     let maxBatchPerConnection = max 1 settings.MaxBatchPerConnection
     let httpPolicy = normalizePolicy httpPolicy
 

@@ -2643,6 +2643,7 @@ type private QueryCompiler
                 // Entity ref always exists here after resolution step.
                 let entityRef = Option.get fieldRef.Entity
                 let tableRef = compileRenamedEntityRef entityRef
+
                 let fromInfo =
                     Map.findWithDefault
                         tableRef.Name
@@ -2652,6 +2653,7 @@ type private QueryCompiler
                           MainSubEntity = None
                           Attributes = emptyEntityAttributes }
                         fromMap
+
                 let fieldInfo = ObjectMap.findType<FieldRefMeta> resultRef.Extra
 
                 // Add system columns (id or sub_entity - this is a generic function).
