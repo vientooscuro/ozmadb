@@ -34,6 +34,7 @@ type RequestParams =
       IsRoot: bool
       CanRead: bool
       Language: string
+      Theme: string
       Quota: RequestQuota }
 
 type private RequestArguments = { CanRead: bool; Quota: RequestQuota }
@@ -96,6 +97,7 @@ type RequestContext private (ctx: IContext, initialUserInfo: RequestUserInfo, op
         // Should be in sync with globalArgumentTypes
         let globalArguments =
             [ (OzmaQLName "lang", FString user.Language)
+              (OzmaQLName "theme", FString user.Theme)
               (OzmaQLName "user", FString user.Effective.Name)
               (OzmaQLName "user_id", userIdValue)
               (OzmaQLName "transaction_time", FDateTime ctx.TransactionTime)
@@ -204,7 +206,8 @@ type RequestContext private (ctx: IContext, initialUserInfo: RequestUserInfo, op
             let userInfo =
                 { Saved = initialUser
                   Effective = initialUser
-                  Language = opts.Language }
+                  Language = opts.Language
+                  Theme = opts.Theme }
 
             let args =
                 { CanRead = opts.CanRead

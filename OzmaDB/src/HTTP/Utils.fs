@@ -440,6 +440,16 @@ let private getLanguage (ctx: HttpContext) =
     | Some l -> l.Value.Value
     | None -> "en-US"
 
+let private getTheme (ctx: HttpContext) =
+    match ctx.GetQueryStringValue "__theme" with
+    | Ok theme when not <| String.IsNullOrWhiteSpace theme -> theme
+    | _ ->
+        match ctx.Request.Headers.TryGetValue("X-OzmaDB-Theme") with
+        | (true, values) when not <| Seq.isEmpty values ->
+            let theme = Seq.last values
+            if String.IsNullOrWhiteSpace theme then "default" else theme
+        | _ -> "default"
+
 let private rateExceeded msg = requestError (RIRateExceeded msg)
 
 let private getIpAddress (ctx: HttpContext) =
@@ -689,6 +699,7 @@ type HttpJobUtils
         (touchAccessedAt: bool)
         (ictx: InstanceContext)
         (language: string)
+        (theme: string)
         (f: IOzmaDBAPI -> Task<HttpJobResponse>)
         (cancellationToken: CancellationToken)
         : Task<HttpJobResponse> =
@@ -713,6 +724,7 @@ type HttpJobUtils
                                   IsRoot = ictx.IsRoot
                                   CanRead = ictx.CanRead
                                   Language = language
+                                  Theme = theme
                                   Context = dbCtx
                                   Quota =
                                     { MaxUsers = ictx.Instance.MaxUsers
@@ -758,7 +770,8 @@ type HttpJobUtils
         (ctx: HttpContext)
         =
         let lang = getLanguage ctx
-        wrapAsJob (runWithApi touchAccessedAt ictx lang f) next ctx
+        let theme = getTheme ctx
+        wrapAsJob (runWithApi touchAccessedAt ictx lang theme f) next ctx
 
     let checkRateLimit
         (prefix: string)

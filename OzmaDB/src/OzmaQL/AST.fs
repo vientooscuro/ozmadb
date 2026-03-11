@@ -2308,6 +2308,7 @@ let requiredArgument (argType: FieldType<'te>) : Argument<'te, 'e, 'f> =
 let globalArgumentTypes: Map<ArgumentName, ResolvedArgument> =
     Map.ofSeq
         [ (OzmaQLName "lang", requiredArgument (FTScalar SFTString))
+          (OzmaQLName "theme", requiredArgument (FTScalar SFTString))
           (OzmaQLName "user", requiredArgument (FTScalar SFTString))
           (OzmaQLName "user_id",
            requiredArgument (FTScalar(SFTReference({ Schema = funSchema; Name = funUsers }, None))))

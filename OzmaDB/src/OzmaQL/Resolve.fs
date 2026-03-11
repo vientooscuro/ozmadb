@@ -2194,6 +2194,7 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
         relaxEntityRef fullRef
 
     let requestLinesNumberFunction = OzmaQLName "request_lines_number"
+    let currentThemeFunction = OzmaQLName "current_theme"
 
     let resolveFieldValue: FieldValue -> FieldValue =
         function
@@ -2215,6 +2216,8 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
         | FEFunc(name, args) ->
             if name = requestLinesNumberFunction && Array.isEmpty args then
                 Some(FTScalar SFTInt)
+            else if name = currentThemeFunction && Array.isEmpty args then
+                Some(FTScalar SFTString)
             else
                 match Map.tryFind (SQL.SQLName <| string name) SQL.sqlKnownFunctions with
                 | Some overloads ->

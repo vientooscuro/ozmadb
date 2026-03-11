@@ -164,7 +164,8 @@ type RequestUser =
 type RequestUserInfo =
     { Saved: RequestUser
       Effective: RequestUser
-      Language: string }
+      Language: string
+      Theme: string }
 
 [<SerializeAsObject("type")>]
 type EventSource =

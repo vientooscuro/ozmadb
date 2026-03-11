@@ -73,6 +73,7 @@ type TimeTriggersWorker
                       IsRoot = true
                       CanRead = true
                       Language = "en"
+                      Theme = "default"
                       Quota = { MaxSize = None; MaxUsers = None } }
 
                 let! rctx = RequestContext.Create(reqParams)
