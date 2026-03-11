@@ -1,7 +1,7 @@
 {
   "version": 1,
   "dependencies": {
-    "net8.0": {
+    "net10.0": {
       "Microsoft.EntityFrameworkCore": {
         "type": "Direct",
         "requested": "[8.0.25, )",
@@ -28,10 +28,7 @@
         "type": "Direct",
         "requested": "[3.1.*, )",
         "resolved": "3.1.14",
-        "contentHash": "AoLmMzcASZF/daMb4at16Q+WgH+ke7PfVBieETy0sSr2fdzaaPhhJ42UFGtqWVLzySYA8AnieWHu2qynHGatqw==",
-        "dependencies": {
-          "System.Runtime.CompilerServices.Unsafe": "4.7.1"
-        }
+        "contentHash": "AoLmMzcASZF/daMb4at16Q+WgH+ke7PfVBieETy0sSr2fdzaaPhhJ42UFGtqWVLzySYA8AnieWHu2qynHGatqw=="
       },
       "Npgsql": {
         "type": "Direct",
@@ -130,11 +127,6 @@
         "type": "Transitive",
         "resolved": "8.0.0",
         "contentHash": "bXJEZrW9ny8vjMF1JV253WeLhpEVzFo1lyaZu1vQ4ZxWUlVvknZ/+ftFgVheLubb4eZPSwwxBeqS1JkCOjxd8g=="
-      },
-      "System.Runtime.CompilerServices.Unsafe": {
-        "type": "Transitive",
-        "resolved": "4.7.1",
-        "contentHash": "zOHkQmzPCn5zm/BH+cxC1XbUS3P4Yoi3xzW7eRgVpDR2tPGSzyMZ17Ig1iRkfJuY0nhxkQQde8pgePNiA7z7TQ=="
       }
     }
   }
