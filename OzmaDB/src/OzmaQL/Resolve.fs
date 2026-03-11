@@ -2272,11 +2272,12 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
             query
         else
             match query.Results with
-            | [| QRExpr({ Alias = Some outName
+            | [| QRExpr({ Alias = outAlias
                           Attributes = attrs
                           Result = FEFunc(funcName, args) } as col) |] when
                 Map.containsKey funcName allowedTableFunctions && Map.isEmpty attrs
                 ->
+                let outName = Option.defaultValue funcName outAlias
                 let sourceAlias = OzmaQLName "__setfn"
                 let sourceEntity = { Schema = None; Name = sourceAlias }: EntityRef
 
