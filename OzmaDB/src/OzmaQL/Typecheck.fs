@@ -24,6 +24,7 @@ let private optionTypeToString: ResolvedFieldType option -> string =
 
 let private requestLinesNumberFunction = OzmaQLName "request_lines_number"
 let private currentThemeFunction = OzmaQLName "current_theme"
+let private nowFunction = OzmaQLName "now"
 
 type FunctionRepr =
     | FRFunction of SQL.SQLName
@@ -99,6 +100,12 @@ let private checkFunc (name: FunctionName) (args: (ResolvedFieldType option) seq
             match argsArr with
             | [||] -> FTScalar SFTString
             | _ -> raisef ViewTypecheckException "current_theme() expects no arguments"
+        else if name = nowFunction then
+            let argsArr = args |> Seq.toArray
+
+            match argsArr with
+            | [||] -> FTScalar SFTDateTime
+            | _ -> raisef ViewTypecheckException "now() expects no arguments"
         else
             match Map.tryFind name allowedFunctions with
             | Some(FRFunction name) ->

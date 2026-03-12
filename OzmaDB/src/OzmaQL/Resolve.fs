@@ -2195,6 +2195,7 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
 
     let requestLinesNumberFunction = OzmaQLName "request_lines_number"
     let currentThemeFunction = OzmaQLName "current_theme"
+    let nowFunction = OzmaQLName "now"
 
     let resolveFieldValue: FieldValue -> FieldValue =
         function
@@ -2218,6 +2219,8 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                 Some(FTScalar SFTInt)
             else if name = currentThemeFunction && Array.isEmpty args then
                 Some(FTScalar SFTString)
+            else if name = nowFunction && Array.isEmpty args then
+                Some(FTScalar SFTDateTime)
             else
                 match Map.tryFind (SQL.SQLName <| string name) SQL.sqlKnownFunctions with
                 | Some overloads ->
@@ -2920,7 +2923,7 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
             | FEFunc(name, args) ->
                 let newArgs = Array.map (traverse outerTypeCtxs >> snd) args
 
-                if name = currentThemeFunction then
+                if name = currentThemeFunction || name = nowFunction then
                     exprInfo <-
                         { exprInfo with
                             Flags =

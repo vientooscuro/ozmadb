@@ -1075,7 +1075,9 @@ type CompilationFlags = { SubExprJoinNamespace: JoinNamespace }
 let defaultCompilationFlags = { SubExprJoinNamespace = rootJoinNamespace }
 let private requestLinesNumberFunction = OzmaQLName "request_lines_number"
 let private currentThemeFunction = OzmaQLName "current_theme"
+let private nowFunction = OzmaQLName "now"
 let private currentThemeGlobalArgument = OzmaQLName "theme"
+let private transactionTimeGlobalArgument = OzmaQLName "transaction_time"
 
 // Expects metadata:
 // * `FieldMeta` for all immediate FERefs in result expressions when meta columns are required;
@@ -2036,6 +2038,12 @@ type private QueryCompiler
                         SQL.VECast(SQL.VEPlaceholder argType.PlaceholderId, argType.DbType)
                     else
                         raisef QueryCompileException "current_theme() expects no arguments"
+                else if name = nowFunction then
+                    if Array.isEmpty args then
+                        let argType = getArgumentType (PGlobal transactionTimeGlobalArgument)
+                        SQL.VECast(SQL.VEPlaceholder argType.PlaceholderId, argType.DbType)
+                    else
+                        raisef QueryCompileException "now() expects no arguments"
                 else
                     let compArgs = Array.map traverse args
 
