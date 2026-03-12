@@ -260,9 +260,37 @@ let inline commitAndReturn
     ([<InlineIfLambda>] getResult: unit -> HttpJobResponse)
     : Task<HttpJobResponse> =
     task {
-        match! api.Request.Context.Commit() with
-        | Error e -> return jobError e
-        | Ok() -> return getResult ()
+        // Migration conflicts are transient when multiple writers trigger layout migration.
+        // Retry commit a few times to hide these conflicts from clients.
+        let maxMigrationCommitRetries = 12
+        let baseDelayMs = 50
+
+        let isMigrationConflict =
+            function
+            | GECommit inner ->
+                match inner with
+                | :? GenericErrorInfo as e -> e = GEMigrationConflict
+                | _ -> false
+            | _ -> false
+
+        let mutable attempt = 0
+        let mutable ret: HttpJobResponse option = None
+
+        while Option.isNone ret do
+            let commitTask: Task<Result<unit, GenericErrorInfo>> = api.Request.Context.Commit()
+            let! commitRet = commitTask
+
+            match commitRet with
+            | Ok() -> ret <- Some(getResult ())
+            | Error e when attempt < maxMigrationCommitRetries && isMigrationConflict e ->
+                let maxJitter = 50
+                let jitter = Random.Shared.Next(maxJitter)
+                let delay = min 1000 ((baseDelayMs * (1 <<< attempt)) + jitter)
+                do! Task.Delay(delay, api.Request.Context.CancellationToken)
+                attempt <- attempt + 1
+            | Error e -> ret <- Some(jobError e)
+
+        return Option.get ret
     }
 
 let inline commitAndOk (api: IOzmaDBAPI) : Task<HttpJobResponse> =
