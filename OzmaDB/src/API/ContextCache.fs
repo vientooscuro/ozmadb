@@ -194,6 +194,171 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
 
         { Schemas = pristineSchemas }
 
+    let userFunctionsTableQuery =
+        """
+{
+    $schema reference(public.schemas) null @{
+        caption = { schema: 'admin', message: 'Schema' }
+    }
+}:
+select
+    @type = 'table',
+    @title = { schema: 'admin', message: 'User Functions' },
+    @disable_auto_save = true,
+    @show_argument_button = true,
+
+    signature @{
+        column_width = 150
+    },
+    name @{
+        column_width = 220
+    },
+    schema_id @{
+        visible = $schema is null,
+        default_value = $schema
+    },
+    priority @{
+        column_width = 70
+    },
+    enabled @{
+        column_width = 70
+    },
+    ddl @{
+        column_width = 550,
+        control_height = 250
+    },
+    id @{
+        column_width = 50,
+        text_align = 'center'
+    }
+from
+    public.user_functions
+where
+    $schema is null or schema_id = $schema
+order by
+    id
+for insert into
+    public.user_functions
+"""
+
+    let userTypesTableQuery =
+        """
+{
+    $schema reference(public.schemas) null @{
+        caption = { schema: 'admin', message: 'Schema' }
+    }
+}:
+select
+    @type = 'table',
+    @title = { schema: 'admin', message: 'User Types' },
+    @disable_auto_save = true,
+    @show_argument_button = true,
+
+    name @{
+        column_width = 220
+    },
+    schema_id @{
+        visible = $schema is null,
+        default_value = $schema
+    },
+    priority @{
+        column_width = 70
+    },
+    enabled @{
+        column_width = 70
+    },
+    ddl @{
+        column_width = 550,
+        control_height = 250
+    },
+    id @{
+        column_width = 50,
+        text_align = 'center'
+    }
+from
+    public.user_types
+where
+    $schema is null or schema_id = $schema
+order by
+    id
+for insert into
+    public.user_types
+"""
+
+    let schemaFormInsertionBlock =
+        """
+    {
+        ref: &admin.user_functions_table,
+        args: { schema: $id }
+    } as user_functions @{
+        control = 'user_view',
+        form_block = 0,
+    },
+    {
+        ref: &admin.user_types_table,
+        args: { schema: $id }
+    } as user_types @{
+        control = 'user_view',
+        form_block = 0,
+    },
+"""
+
+    let ensureSchemaFormLists (query: string) : string =
+        if query.Contains("as user_functions") && query.Contains("as user_types") then
+            query
+        else
+            let marker =
+                """    {
+        ref: &admin.user_view_generators_table,"""
+
+            let idx = query.IndexOf(marker, StringComparison.Ordinal)
+
+            if idx < 0 then
+                query
+            else
+                query.Insert(idx, schemaFormInsertionBlock)
+
+    let upsertBuiltinViewIfMissing
+        (viewName: string)
+        (query: string)
+        (views: Map<UserViewName, SourceUserView>)
+        : Map<UserViewName, SourceUserView> =
+        let key = OzmaQLName viewName
+
+        match Map.tryFind key views with
+        | Some _ -> views
+        | None -> Map.add key { AllowBroken = false; Query = query } views
+
+    let upgradeSystemAdminViews (views: SourceUserViews) : SourceUserViews =
+        let adminName = OzmaQLName "admin"
+
+        match Map.tryFind adminName views.Schemas with
+        | None -> views
+        | Some adminSchema ->
+            let schemaFormName = OzmaQLName "schema_form"
+
+            let viewsWithTables =
+                adminSchema.UserViews
+                |> upsertBuiltinViewIfMissing "user_functions_table" userFunctionsTableQuery
+                |> upsertBuiltinViewIfMissing "user_types_table" userTypesTableQuery
+
+            let upgradedViews =
+                match Map.tryFind schemaFormName viewsWithTables with
+                | None -> viewsWithTables
+                | Some schemaForm ->
+                    let upgradedSchemaForm =
+                        { schemaForm with
+                            Query = ensureSchemaFormLists schemaForm.Query }
+
+                    Map.add schemaFormName upgradedSchemaForm viewsWithTables
+
+            let upgradedSchema =
+                { adminSchema with
+                    UserViews = upgradedViews }
+
+            { views with
+                Schemas = Map.add adminName upgradedSchema views.Schemas }
+
     let filterUserLayout (layout: Layout) : Layout =
         { Schemas = filterUserSchemas preload layout.Schemas
           SaveRestoredEntities = layout.SaveRestoredEntities }
@@ -329,10 +494,11 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
                     task {
                         try
                             let systemViews = preloadUserViews preload
-                            let! sourceViews = buildSchemaUserViews transaction.System None cancellationToken
+                            let! sourceViewsRaw = buildSchemaUserViews transaction.System None cancellationToken
+                            let sourceViewsRaw = upgradeSystemAdminViews sourceViewsRaw
 
                             let sourceViews =
-                                { Schemas = Map.union systemViews.Schemas sourceViews.Schemas }: SourceUserViews
+                                { Schemas = Map.union systemViews.Schemas sourceViewsRaw.Schemas }: SourceUserViews
 
                             let! sourceModules = buildSchemaModules transaction.System None cancellationToken
                             let modules = resolveModules layout sourceModules true
@@ -593,7 +759,8 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
                         let triggers = resolveTriggers layout false sourceTriggers
                         let mergedTriggers = mergeTriggers layout triggers
 
-                        let! sourceUvs = buildSchemaUserViews transaction.System None cancellationToken
+                        let! sourceUvsRaw = buildSchemaUserViews transaction.System None cancellationToken
+                        let sourceUvs = upgradeSystemAdminViews sourceUvsRaw
 
                         let! sourceAttrs = buildSchemaAttributes transaction.System None cancellationToken
                         let parsedAttrs = parseAttributes false sourceAttrs
@@ -873,7 +1040,9 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
                             with e ->
                                 raise
                                 <| ContextException(
-                                    GEMigration("Failed to apply user-defined DDL (pre-migration): " + fullUserMessage e),
+                                    GEMigration(
+                                        "Failed to apply user-defined DDL (pre-migration): " + fullUserMessage e
+                                    ),
                                     e
                                 )
 
@@ -887,14 +1056,17 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
                                 with e ->
                                     raise
                                     <| ContextException(
-                                        GEMigration("Failed to load user-defined function registry: " + fullUserMessage e),
+                                        GEMigration(
+                                            "Failed to load user-defined function registry: " + fullUserMessage e
+                                        ),
                                         e
                                     )
 
                             let migration =
                                 planDatabaseMigration oldState.Context.UserMeta wantedLayoutMeta
                                 |> Array.filter (function
-                                    | SQL.SODropFunction(funcRef, _) when Set.contains funcRef protectedFunctions -> false
+                                    | SQL.SODropFunction(funcRef, _) when Set.contains funcRef protectedFunctions ->
+                                        false
                                     | _ -> true)
 
                             try
@@ -912,7 +1084,9 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
                             with e ->
                                 raise
                                 <| ContextException(
-                                    GEMigration("Failed to apply user-defined DDL (post-migration): " + fullUserMessage e),
+                                    GEMigration(
+                                        "Failed to apply user-defined DDL (post-migration): " + fullUserMessage e
+                                    ),
                                     e
                                 )
 
@@ -1026,9 +1200,15 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
                                         preparedTriggers
                                         cancellationToken
 
-                            let! sourceUserViews = buildSchemaUserViews transaction.System None cancellationToken
+                            let! sourceUserViewsRaw = buildSchemaUserViews transaction.System None cancellationToken
+                            let sourceUserViews = upgradeSystemAdminViews sourceUserViewsRaw
 
-                            if filterSystemViews sourceUserViews <> oldState.Context.SystemViews then
+                            let currentSystemViews = filterSystemViews sourceUserViews
+
+                            let expectedSystemViews =
+                                oldState.Context.SystemViews |> upgradeSystemAdminViews |> filterSystemViews
+
+                            if currentSystemViews <> expectedSystemViews then
                                 raise <| ContextException(GEMigration("Cannot modify preloaded user views"))
 
                             logger.LogInformation("Updating generated user views")
