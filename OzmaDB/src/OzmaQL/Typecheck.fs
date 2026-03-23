@@ -169,8 +169,7 @@ let private checkWindowFunc (name: FunctionName) (args: (ResolvedFieldType optio
             let sqlArgs = args |> Seq.map (Option.map compileFieldType) |> Seq.toArray
 
             match SQL.findFunctionOverloads overloads sqlArgs with
-            | None ->
-                raisef ViewTypecheckException "Couldn't deduce window function overload"
+            | None -> raisef ViewTypecheckException "Couldn't deduce window function overload"
             | Some(_, ret) -> Some <| decompileFieldType ret
     with e ->
         raisefWithInner

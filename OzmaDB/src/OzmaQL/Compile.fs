@@ -2053,7 +2053,9 @@ type private QueryCompiler
                     | Some(FRSpecial special) -> SQL.VESpecialFunc(special, compArgs)
             | FEWindowFunc(name, args, window) ->
                 let compArgs = Array.map traverse args
-                let sqlName = Option.defaultValue (compileName name) (Map.tryFind name allowedWindowFunctions)
+
+                let sqlName =
+                    Option.defaultValue (compileName name) (Map.tryFind name allowedWindowFunctions)
 
                 let compWindow: SQL.WindowClause =
                     { PartitionBy = Array.map traverse window.PartitionBy

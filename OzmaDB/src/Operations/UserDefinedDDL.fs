@@ -35,10 +35,7 @@ let private isDuplicateDdlError (e: exn) =
         | _ -> false
     | _ -> false
 
-let private registryTablesExist
-    (transaction: DatabaseTransaction)
-    (cancellationToken: CancellationToken)
-    : Task<bool> =
+let private registryTablesExist (transaction: DatabaseTransaction) (cancellationToken: CancellationToken) : Task<bool> =
     task {
         let! res =
             transaction.Connection.Query.ExecuteValueQuery
@@ -107,9 +104,11 @@ let getProtectedUserFunctions
             functions
             |> Seq.map (fun entry ->
                 let struct (schemaName, functionName, _, _, _) = entry
+
                 let objRef: SQL.SchemaObject =
                     { Schema = Some <| SQL.SQLName schemaName
                       Name = SQL.SQLName functionName }
+
                 objRef)
             |> Set.ofSeq
     }
@@ -160,5 +159,11 @@ let applyUserDefinedDDL (transaction: DatabaseTransaction) (cancellationToken: C
                 if isDuplicateDdlError e then
                     ()
                 else
-                    raisefWithInner Exception e "Failed to apply user function %s.%s%s" schemaName functionName signature
+                    raisefWithInner
+                        Exception
+                        e
+                        "Failed to apply user function %s.%s%s"
+                        schemaName
+                        functionName
+                        signature
     }
