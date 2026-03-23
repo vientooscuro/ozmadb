@@ -322,31 +322,32 @@ let private makeUnconstrainedTableMeta (cl: Class) : TableName * HalfTableMeta =
 let private makeSequenceMeta (cl: Class) : SequenceName * RelationMeta =
     (SQLName cl.RelName, OMSequence Set.empty)
 
-let private makeFunctionMeta (proc: Proc) : FunctionName * Map<FunctionSignature, FunctionDefinition> =
+let private makeFunctionMeta (proc: Proc) : (FunctionName * Map<FunctionSignature, FunctionDefinition>) option =
     try
+        // We currently don't have argument type metadata in PgCatalog. Ignore overloaded/arg functions
+        // here instead of failing the whole schema introspection.
         if proc.ProNArgs <> 0s then
-            raisef SQLMetaException "Function with arguments is not supported"
+            None
+        elif proc.ProRetSet then
+            None
+        else
+            let behaviour =
+                match proc.ProVolatile with
+                | 'i' -> FBImmutable
+                | 's' -> FBStable
+                | 'v' -> FBVolatile
+                | _ -> raisef SQLMetaException "Unknown volatile specifier %c" proc.ProVolatile
 
-        if proc.ProRetSet then
-            raisef SQLMetaException "Function which return tables are not supported"
+            let signature = [||]
 
-        let behaviour =
-            match proc.ProVolatile with
-            | 'i' -> FBImmutable
-            | 's' -> FBStable
-            | 'v' -> FBVolatile
-            | _ -> raisef SQLMetaException "Unknown volatile specifier %c" proc.ProVolatile
+            let def =
+                { Arguments = [||]
+                  ReturnValue = FRValue <| SQLRawString proc.RetType.TypName
+                  Behaviour = behaviour
+                  Language = SQLName proc.Language.LanName
+                  Definition = proc.ProSrc }
 
-        let signature = [||]
-
-        let def =
-            { Arguments = [||]
-              ReturnValue = FRValue <| SQLRawString proc.RetType.TypName
-              Behaviour = behaviour
-              Language = SQLName proc.Language.LanName
-              Definition = proc.ProSrc }
-
-        (SQLName proc.ProName, Map.singleton signature def)
+            Some(SQLName proc.ProName, Map.singleton signature def)
     with e ->
         raisefWithInner SQLMetaException e "In function %s" proc.ProName
 
@@ -369,7 +370,7 @@ let private makeUnconstrainedSchemaMeta (ns: Namespace) : SchemaName * PgSchemaM
         let functions =
             ns.Procs
             |> Seq.ofObj
-            |> Seq.map makeFunctionMeta
+            |> Seq.choose makeFunctionMeta
             |> Map.ofSeqWith (fun name -> Map.unionUnique)
             |> Map.map (fun name overloads -> (Set.empty, overloads))
 

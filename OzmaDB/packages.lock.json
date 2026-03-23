@@ -131,8 +131,8 @@
       "Npgsql": {
         "type": "Direct",
         "requested": "[8.0.*, )",
-        "resolved": "8.0.8",
-        "contentHash": "1g7tA1easureueqyS5SqJtojI7FwEdw50UYTh0l576iWZNnyRyAVfFi1bJp4BzO8IwYodP8YCRp6ThNQvvBn8A=="
+        "resolved": "8.0.9",
+        "contentHash": "H7O9NrvSO+BaojUOK59YmSOi7+RabnBoNPw1F7NgtZhw5uBeAA3bCjTH2VjgacUVHe8K1asPyj/a/mnhJ/e1yA=="
       },
       "Npgsql.EntityFrameworkCore.PostgreSQL": {
         "type": "Direct",
@@ -159,21 +159,21 @@
       "Npgsql.Json.NET": {
         "type": "Direct",
         "requested": "[8.0.*, )",
-        "resolved": "8.0.8",
-        "contentHash": "q02hKI7fMassUBpQv3ddy53BDDvq600fjMWVuRUsYQjoF738SjIHSqlAEEHKXLl1/90BHGZNdSNmoWlihawGTg==",
+        "resolved": "8.0.9",
+        "contentHash": "xHdYxSWIkpOhSpD00tUr4WYuFZaTXMkkpMZPTQjuadJ1NmjLeKH8UGoPZnCN2Bjsq9HBpOXy9f0vw8fZn+goag==",
         "dependencies": {
           "Newtonsoft.Json": "13.0.3",
-          "Npgsql": "8.0.8"
+          "Npgsql": "8.0.9"
         }
       },
       "Npgsql.NodaTime": {
         "type": "Direct",
         "requested": "[8.0.*, )",
-        "resolved": "8.0.8",
-        "contentHash": "FWn69S5nbKnjPSE2T+ka29rAAeAiFTtWvLHUu780f+IDunquMR6hU3Zku4fbGCK8UxGBVs4n7tORddzO9WHOUg==",
+        "resolved": "8.0.9",
+        "contentHash": "jZeRl8VC4OQEAm4vq7Nt3G5A7pt2oaLfxdRER9kxtEFp2ENZ8kcYAZdVu3FTSdY7UKHfwi9rN4xALDHs1TOaqw==",
         "dependencies": {
           "NodaTime": "3.1.9",
-          "Npgsql": "8.0.8"
+          "Npgsql": "8.0.9"
         }
       },
       "prometheus-net.AspNetCore": {

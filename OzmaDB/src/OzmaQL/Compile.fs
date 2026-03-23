@@ -2048,12 +2048,12 @@ type private QueryCompiler
                     let compArgs = Array.map traverse args
 
                     match Map.tryFind name allowedFunctions with
-                    | None -> raisef QueryCompileException "Unknown function: %O" name
+                    | None -> SQL.VEFunc(compileName name, compArgs)
                     | Some(FRFunction name) -> SQL.VEFunc(name, compArgs)
                     | Some(FRSpecial special) -> SQL.VESpecialFunc(special, compArgs)
             | FEWindowFunc(name, args, window) ->
                 let compArgs = Array.map traverse args
-                let sqlName = Map.find name allowedWindowFunctions
+                let sqlName = Option.defaultValue (compileName name) (Map.tryFind name allowedWindowFunctions)
 
                 let compWindow: SQL.WindowClause =
                     { PartitionBy = Array.map traverse window.PartitionBy

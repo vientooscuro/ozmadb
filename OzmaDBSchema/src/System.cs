@@ -75,6 +75,18 @@ namespace OzmaDBSchema.System
         [ComputedField("full_name", "schema_id=>__main || '.' || name")]
         [UniqueConstraint("name", new[] { "schema_id", "name" }, IsAlternateKey = true)]
         [CheckConstraint("not_reserved", "name <> ''")]
+        public DbSet<UserType> UserTypes { get; set; } = null!;
+
+        [Entity("full_name", SaveRestoreKey = "name", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, TriggersMigration = true)]
+        [ComputedField("full_name", "schema_id=>__main || '.' || name")]
+        [UniqueConstraint("name", new[] { "schema_id", "name", "signature" }, IsAlternateKey = true)]
+        [CheckConstraint("not_reserved", "name <> ''")]
+        public DbSet<UserFunction> UserFunctions { get; set; } = null!;
+
+        [Entity("full_name", SaveRestoreKey = "name", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, TriggersMigration = true)]
+        [ComputedField("full_name", "schema_id=>__main || '.' || name")]
+        [UniqueConstraint("name", new[] { "schema_id", "name" }, IsAlternateKey = true)]
+        [CheckConstraint("not_reserved", "name <> ''")]
         public DbSet<Role> Roles { get; set; } = null!;
 
         [Entity("id", SaveRestoreKey = "entry", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, TriggersMigration = true)]
@@ -338,6 +350,8 @@ namespace OzmaDBSchema.System
         public List<Trigger>? Triggers { get; set; }
         public UserViewGenerator? UserViewGenerator { get; set; }
         public List<UserView>? UserViews { get; set; }
+        public List<UserType>? UserTypes { get; set; }
+        public List<UserFunction>? UserFunctions { get; set; }
     }
 
     public class Entity
@@ -579,6 +593,56 @@ namespace OzmaDBSchema.System
         [ColumnField("string")]
         [Required]
         public string Query { get; set; } = null!;
+    }
+
+    public class UserType
+    {
+        public int Id { get; set; }
+
+        [ColumnField("reference(public.schemas)")]
+        public int SchemaId { get; set; }
+        public Schema? Schema { get; set; }
+
+        [ColumnField("string")]
+        [Required]
+        public string Name { get; set; } = null!;
+
+        [ColumnField("bool", Default = "true")]
+        public bool Enabled { get; set; } = true;
+
+        [ColumnField("int", Default = "0")]
+        public int Priority { get; set; }
+
+        [ColumnField("string")]
+        [Required]
+        public string Ddl { get; set; } = null!;
+    }
+
+    public class UserFunction
+    {
+        public int Id { get; set; }
+
+        [ColumnField("reference(public.schemas)")]
+        public int SchemaId { get; set; }
+        public Schema? Schema { get; set; }
+
+        [ColumnField("string")]
+        [Required]
+        public string Name { get; set; } = null!;
+
+        [ColumnField("string", Default = "'()'")]
+        [Required]
+        public string Signature { get; set; } = "()";
+
+        [ColumnField("bool", Default = "true")]
+        public bool Enabled { get; set; } = true;
+
+        [ColumnField("int", Default = "0")]
+        public int Priority { get; set; }
+
+        [ColumnField("string")]
+        [Required]
+        public string Ddl { get; set; } = null!;
     }
 
     public class Role

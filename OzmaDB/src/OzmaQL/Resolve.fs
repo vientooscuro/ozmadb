@@ -3445,10 +3445,7 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                     let fromInfo = unionFromExprInfo fromInfo myFromInfo
                     (fromInfo, TESelect newQ)
                 | TETableFunc(funcName, args) ->
-                    let sqlFuncName =
-                        match Map.tryFind funcName allowedTableFunctions with
-                        | Some name -> name
-                        | None -> raisef QueryResolveException "Unknown table function: %O" funcName
+                    let sqlFuncName = SQL.SQLName <| string funcName
 
                     let mutable argsInfo = emptySubqueryExprInfo
 
@@ -3481,16 +3478,17 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
                             newArgs
                             |> Array.map (fun arg -> tryInferResolvedFieldExprType arg |> Option.map compileFieldType)
 
-                        let overloads = Map.find sqlFuncName SQL.sqlKnownFunctions
-
-                        match SQL.findFunctionOverloads overloads sqlArgs with
-                        | None ->
-                            raisef
-                                QueryResolveException
-                                "Couldn't deduce table function overload: %O(%s)"
-                                funcName
-                                (newArgs |> Seq.map string |> String.concat ", ")
-                        | Some(_, ret) -> Some <| decompileFieldType ret
+                        match Map.tryFind sqlFuncName SQL.sqlKnownFunctions with
+                        | None -> None
+                        | Some overloads ->
+                            match SQL.findFunctionOverloads overloads sqlArgs with
+                            | None ->
+                                raisef
+                                    QueryResolveException
+                                    "Couldn't deduce table function overload: %O(%s)"
+                                    funcName
+                                    (newArgs |> Seq.map string |> String.concat ", ")
+                            | Some(_, ret) -> Some <| decompileFieldType ret
 
                     let fieldsMap =
                         Map.singleton

@@ -61,6 +61,7 @@ module SQL = OzmaDB.SQL.AST
 module SQL = OzmaDB.SQL.DDL
 
 open OzmaDB.JavaScript.Runtime
+open OzmaDB.Operations.UserDefinedDDL
 open OzmaDB.Operations.Preload
 open OzmaDB.Operations.Command
 open OzmaDB.API.Types
@@ -866,11 +867,35 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
                             if forceAllowBroken then
                                 do! checkBrokenLayout logger true preload transaction layout cancellationToken
 
+                            // Apply user-defined DDL prelude before migration so dependent schema operations can succeed.
+                            try
+                                do! applyUserDefinedDDL transaction cancellationToken
+                            with e ->
+                                raise
+                                <| ContextException(
+                                    GEMigration("Failed to apply user-defined DDL (pre-migration): " + fullUserMessage e),
+                                    e
+                                )
+
                             // Actually migrate.
-                            let (newAssertions, wantedUserMeta) =
+                            let (newAssertions, wantedLayoutMeta) =
                                 buildFullLayoutMeta layout (filterUserLayout layout)
 
-                            let migration = planDatabaseMigration oldState.Context.UserMeta wantedUserMeta
+                            let! protectedFunctions =
+                                try
+                                    getProtectedUserFunctions transaction cancellationToken
+                                with e ->
+                                    raise
+                                    <| ContextException(
+                                        GEMigration("Failed to load user-defined function registry: " + fullUserMessage e),
+                                        e
+                                    )
+
+                            let migration =
+                                planDatabaseMigration oldState.Context.UserMeta wantedLayoutMeta
+                                |> Array.filter (function
+                                    | SQL.SODropFunction(funcRef, _) when Set.contains funcRef protectedFunctions -> false
+                                    | _ -> true)
 
                             try
                                 do! migrateDatabase transaction.Connection.Query migration cancellationToken
@@ -880,6 +905,19 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
                                     GEMigration("Failed to update the database: " + fullUserMessage e),
                                     e
                                 )
+
+                            // Re-apply user-defined registry after migration to keep DDL in sync.
+                            try
+                                do! applyUserDefinedDDL transaction cancellationToken
+                            with e ->
+                                raise
+                                <| ContextException(
+                                    GEMigration("Failed to apply user-defined DDL (post-migration): " + fullUserMessage e),
+                                    e
+                                )
+
+                            // Store actual user metadata after migration and user-defined DDL execution.
+                            let! wantedUserMeta = buildUserDatabaseMeta transaction preload cancellationToken
 
                             let oldAssertions =
                                 buildAssertions oldState.Context.Layout (filterUserLayout oldState.Context.Layout)

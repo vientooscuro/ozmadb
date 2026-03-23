@@ -86,35 +86,45 @@ let private checkAllowedFunctions () =
 
 assert checkAllowedFunctions ()
 
-let private checkFunc (name: FunctionName) (args: (ResolvedFieldType option) seq) : ResolvedFieldType =
+let private tryCheckKnownSqlFunction
+    (sqlName: SQL.SQLName)
+    (args: (ResolvedFieldType option) seq)
+    : ResolvedFieldType option =
+    match Map.tryFind sqlName SQL.sqlKnownFunctions with
+    | None -> None
+    | Some overloads ->
+        let sqlArgs = args |> Seq.map (Option.map compileFieldType) |> Seq.toArray
+
+        match SQL.findFunctionOverloads overloads sqlArgs with
+        | None -> None
+        | Some(_, ret) -> Some <| decompileFieldType ret
+
+let private checkFunc (name: FunctionName) (args: (ResolvedFieldType option) seq) : ResolvedFieldType option =
     try
         if name = requestLinesNumberFunction then
             let argsArr = args |> Seq.toArray
 
             match argsArr with
-            | [||] -> FTScalar SFTInt
+            | [||] -> Some <| FTScalar SFTInt
             | _ -> raisef ViewTypecheckException "request_lines_number() expects no arguments"
         else if name = currentThemeFunction then
             let argsArr = args |> Seq.toArray
 
             match argsArr with
-            | [||] -> FTScalar SFTString
+            | [||] -> Some <| FTScalar SFTString
             | _ -> raisef ViewTypecheckException "current_theme() expects no arguments"
         else if name = nowFunction then
             let argsArr = args |> Seq.toArray
 
             match argsArr with
-            | [||] -> FTScalar SFTDateTime
+            | [||] -> Some <| FTScalar SFTDateTime
             | _ -> raisef ViewTypecheckException "now() expects no arguments"
         else
             match Map.tryFind name allowedFunctions with
             | Some(FRFunction name) ->
-                let overloads = Map.find name SQL.sqlKnownFunctions
-                let sqlArgs = args |> Seq.map (Option.map compileFieldType) |> Seq.toArray
-
-                match SQL.findFunctionOverloads overloads sqlArgs with
+                match tryCheckKnownSqlFunction name args with
+                | Some ret -> Some ret
                 | None -> raisef ViewTypecheckException "Couldn't deduce function overload"
-                | Some(typs, ret) -> decompileFieldType ret
             | Some(FRSpecial SQL.SFNullIf) ->
                 let arrArgs = args |> Seq.toArray
 
@@ -129,15 +139,15 @@ let private checkFunc (name: FunctionName) (args: (ResolvedFieldType option) seq
                             (Option.map compileFieldType secondArg)
                     with
                     | None -> raisef ViewTypecheckException "Cannot compare NULLIF arguments"
-                    | Some((firstTyp, _), _) -> decompileFieldType firstTyp
+                    | Some((firstTyp, _), _) -> Some <| decompileFieldType firstTyp
                 | _ -> raisef ViewTypecheckException "NULLIF expects exactly two arguments"
             | Some(FRSpecial SQL.SFLeast)
             | Some(FRSpecial SQL.SFGreatest)
             | Some(FRSpecial SQL.SFCoalesce) ->
                 match unionTypes args with
-                | Some ret -> ret
+                | Some ret -> Some ret
                 | None -> raisef ViewTypecheckException "Cannot unify values of different types"
-            | None -> raisef ViewTypecheckException "Unknown function"
+            | None -> tryCheckKnownSqlFunction (SQL.SQLName <| string name) args
     with e ->
         raisefWithInner
             ViewTypecheckException
@@ -146,17 +156,22 @@ let private checkFunc (name: FunctionName) (args: (ResolvedFieldType option) seq
             name
             (args |> Seq.map optionTypeToString |> String.concat ", ")
 
-let private checkWindowFunc (name: FunctionName) (args: (ResolvedFieldType option) seq) : ResolvedFieldType =
+let private checkWindowFunc (name: FunctionName) (args: (ResolvedFieldType option) seq) : ResolvedFieldType option =
     try
-        match Map.tryFind name allowedWindowFunctions with
-        | None -> raisef ViewTypecheckException "Unknown window function"
-        | Some sqlName ->
-            let overloads = Map.find sqlName SQL.sqlKnownFunctions
+        let sqlName =
+            match Map.tryFind name allowedWindowFunctions with
+            | Some mapped -> mapped
+            | None -> SQL.SQLName <| string name
+
+        match Map.tryFind sqlName SQL.sqlKnownFunctions with
+        | None -> None
+        | Some overloads ->
             let sqlArgs = args |> Seq.map (Option.map compileFieldType) |> Seq.toArray
 
             match SQL.findFunctionOverloads overloads sqlArgs with
-            | None -> raisef ViewTypecheckException "Couldn't deduce window function overload"
-            | Some(typs, ret) -> decompileFieldType ret
+            | None ->
+                raisef ViewTypecheckException "Couldn't deduce window function overload"
+            | Some(_, ret) -> Some <| decompileFieldType ret
     with e ->
         raisefWithInner
             ViewTypecheckException
@@ -352,7 +367,7 @@ type private Typechecker(layout: ILayoutBits) =
             Some <| FTScalar SFTJson
         | FEFunc(name, args) ->
             let argTypes = Seq.map typecheckFieldExpr args
-            Some <| checkFunc name argTypes
+            checkFunc name argTypes
         | FEWindowFunc(name, args, window) ->
             Array.iter (typecheckFieldExpr >> ignore) args
             Array.iter (typecheckFieldExpr >> ignore) window.PartitionBy
@@ -362,7 +377,7 @@ type private Typechecker(layout: ILayoutBits) =
                 window.OrderBy
 
             let argTypes = Seq.map typecheckFieldExpr args
-            Some <| checkWindowFunc name argTypes
+            checkWindowFunc name argTypes
         | FEAggFunc(name, args, filter) -> raisef ViewTypecheckException "Not implemented"
         | FESubquery query -> raisef ViewTypecheckException "Not implemented"
         | FEExists query -> Some(FTScalar SFTBool)
