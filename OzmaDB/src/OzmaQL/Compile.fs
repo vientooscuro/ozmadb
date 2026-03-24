@@ -2931,6 +2931,8 @@ type private QueryCompiler
 
         let (newDomains, metaColumns) =
             if not addMetaColumns then
+                let newMetaColumns = attributeColumns |> Map.ofSeq
+                let metaColumns = Map.unionUnique metaColumns newMetaColumns
                 (emptyDomains, metaColumns)
             else
                 let newDomains =
