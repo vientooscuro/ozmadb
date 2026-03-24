@@ -71,7 +71,9 @@ namespace OzmaDBSchema.PgCatalog
                 var tableName = table.GetTableName();
                 if (tableName == null || !tableName.StartsWith("pg_"))
                 {
-                    var newTableName = "pg_" + table.ClrType.Name.ToLower();
+                    var clrName = table.ClrType.Name;
+                    var baseName = clrName.StartsWith("Pg") ? clrName.Substring(2) : clrName;
+                    var newTableName = "pg_" + baseName.ToLower();
                     table.SetTableName(newTableName);
                 }
                 foreach (var property in table.GetProperties())
