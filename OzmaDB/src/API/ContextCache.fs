@@ -823,10 +823,9 @@ for insert into
                     let! sourceActions = buildSchemaActions transaction.System None cancellationToken
                     let! sourcePermissions = buildSchemaPermissions transaction.System None cancellationToken
                     let! userMeta = buildUserDatabaseMeta transaction preload cancellationToken
+                    let! pgFunctions = loadPgCatalogFunctions transaction cancellationToken
 
                     let! _ = transaction.Commit cancellationToken
-
-                    let! pgFunctions = loadPgCatalogFunctions transaction cancellationToken
 
                     let actions = resolveActions layout false sourceActions
 
@@ -1364,6 +1363,8 @@ for insert into
                                         cancellationToken
                                     )
 
+                            let! pgFunctions = loadPgCatalogFunctions transaction cancellationToken
+
                             try
                                 let! _ = transaction.Commit(cancellationToken)
                                 ()
@@ -1411,8 +1412,6 @@ for insert into
 
                                         return mergePrefetchedUserViews checkedPrefetchedUserViews uncheckedViews
                                 }
-
-                            let! pgFunctions = loadPgCatalogFunctions transaction cancellationToken
 
                             let domains = buildLayoutDomains layout
 
