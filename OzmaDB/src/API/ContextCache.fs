@@ -59,6 +59,7 @@ open OzmaDB.SQL.Migration
 
 module SQL = OzmaDB.SQL.AST
 module SQL = OzmaDB.SQL.DDL
+module SQL = OzmaDB.SQL.Typecheck
 
 open OzmaDB.JavaScript.Runtime
 open OzmaDB.Operations.UserDefinedDDL
@@ -66,6 +67,16 @@ open OzmaDB.Operations.Preload
 open OzmaDB.Operations.Command
 open OzmaDB.API.Types
 open OzmaDB.API.JavaScript
+
+let private loadPgCatalogFunctions
+    (transaction: DatabaseTransaction)
+    (cancellationToken: CancellationToken)
+    : Task<Map<SQL.SQLName, SQL.FunctionSignaturesMap>> =
+    task {
+        use pg = createPgCatalogContext transaction
+        let! procs = pg.GetPgCatalogFunctions(cancellationToken)
+        return SQL.buildPgCatalogFunctions procs
+    }
 
 type ContextException(details: GenericErrorInfo, innerException: exn) =
     inherit UserException(details.LogMessage, innerException, true)
@@ -107,7 +118,8 @@ type private CachedContext =
       Triggers: MergedTriggers
       TriggerScripts: RuntimeLocal<PreparedTriggers>
       SystemViews: SourceUserViews
-      UserMeta: SQL.DatabaseMeta }
+      UserMeta: SQL.DatabaseMeta
+      PgFunctions: Map<SQL.SQLName, SQL.FunctionSignaturesMap> }
 
 [<NoEquality; NoComparison>]
 type private CachedState =
@@ -480,6 +492,7 @@ for insert into
         : Task<CachedState> =
         task {
             let runtime = jsRuntimes.Get()
+            let! pgFunctions = loadPgCatalogFunctions transaction cancellationToken
 
             try
                 let! (currentVersion,
@@ -553,7 +566,7 @@ for insert into
                                     defaultAttrs
                                     cancellationToken
 
-                            let userViews = resolveUserViews layout mergedAttrs true generatedViews
+                            let userViews = resolveUserViews layout mergedAttrs true generatedViews pgFunctions
 
                             let jsEngine = jsEngines.GetValue runtime
 
@@ -660,7 +673,8 @@ for insert into
                               UserViews = prefetchedViews
                               Domains = domains
                               SystemViews = systemViews
-                              UserMeta = userMeta }
+                              UserMeta = userMeta
+                              PgFunctions = pgFunctions }
 
                         return
                             { Version = currentVersion
@@ -770,8 +784,10 @@ for insert into
 
                         let mergedAttrs = mergeDefaultAttributes layout defaultAttrs
 
+                        let! pgFunctions = loadPgCatalogFunctions transaction cancellationToken
+
                         let userViews =
-                            resolveUserViews layout mergedAttrs false (passthruGeneratedUserViews sourceUvs)
+                            resolveUserViews layout mergedAttrs false (passthruGeneratedUserViews sourceUvs) pgFunctions
 
                         // To dry-run user views we need to stop the transaction.
                         let! _ = transaction.Rollback()
@@ -809,6 +825,8 @@ for insert into
                     let! userMeta = buildUserDatabaseMeta transaction preload cancellationToken
 
                     let! _ = transaction.Commit cancellationToken
+
+                    let! pgFunctions = loadPgCatalogFunctions transaction cancellationToken
 
                     let actions = resolveActions layout false sourceActions
 
@@ -856,7 +874,8 @@ for insert into
                           UserViews = prefetchedViews
                           Domains = domains
                           SystemViews = systemViews
-                          UserMeta = userMeta }
+                          UserMeta = userMeta
+                          PgFunctions = pgFunctions }
 
                     return
                         Some
@@ -1272,9 +1291,11 @@ for insert into
                             if forceAllowBroken then
                                 do! checkBrokenAttributes logger true preload transaction defaultAttrs cancellationToken
 
+                            let! pgFunctions = loadPgCatalogFunctions transaction cancellationToken
+
                             let userViews =
                                 try
-                                    resolveUserViews layout mergedAttrs forceAllowBroken generatedUserViews
+                                    resolveUserViews layout mergedAttrs forceAllowBroken generatedUserViews pgFunctions
                                 with :? UserViewResolveException as e ->
                                     raise
                                     <| ContextException(
@@ -1391,6 +1412,8 @@ for insert into
                                         return mergePrefetchedUserViews checkedPrefetchedUserViews uncheckedViews
                                 }
 
+                            let! pgFunctions = loadPgCatalogFunctions transaction cancellationToken
+
                             let domains = buildLayoutDomains layout
 
                             let newState =
@@ -1409,7 +1432,8 @@ for insert into
                                   UserViews = prefetchedUserViews
                                   Domains = domains
                                   SystemViews = filterSystemViews sourceUserViews
-                                  UserMeta = wantedUserMeta }
+                                  UserMeta = wantedUserMeta
+                                  PgFunctions = pgFunctions }
 
                             clearCaches ()
 
@@ -1437,6 +1461,7 @@ for insert into
                                 isPrivileged
                                 oldState.Context.DefaultAttrs
                                 findExistingView
+                                oldState.Context.PgFunctions
                                 homeSchema
                                 query
 

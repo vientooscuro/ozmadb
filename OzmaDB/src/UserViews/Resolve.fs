@@ -18,6 +18,9 @@ open OzmaDB.Attributes.Types
 open OzmaDB.Attributes.Merge
 open OzmaDB.Objects.Types
 
+module SQL = OzmaDB.SQL.AST
+module SQL = OzmaDB.SQL.Typecheck
+
 type UserViewResolveException(message: string, innerException: exn) =
     inherit UserException(message, innerException)
 
@@ -43,7 +46,8 @@ type private Phase1Resolver
         forceAllowBroken: bool,
         flags: ExprResolutionFlags,
         userViews: GeneratedUserViews,
-        findExistingView: FindExistingView
+        findExistingView: FindExistingView,
+        pgFunctions: Map<SQL.SQLName, SQL.FunctionSignaturesMap>
     ) =
     let getDefaultAttribute (fieldRef: ResolvedFieldRef) (name: AttributeName) : DefaultAttribute option =
         monad {
@@ -63,7 +67,8 @@ type private Phase1Resolver
         { Layout = layout
           HomeSchema = None
           GetDefaultAttribute = getDefaultAttribute
-          HasUserView = hasUserView }
+          HasUserView = hasUserView
+          PgFunctions = pgFunctions }
 
     let resolveUserView (homeSchema: SchemaName option) (uv: SourceUserView) : ResolvedUserView =
         let parsed =
@@ -134,9 +139,18 @@ let resolveUserViews
     (defaultAttrs: MergedDefaultAttributes)
     (forceAllowBroken: bool)
     (userViews: GeneratedUserViews)
+    (pgFunctions: Map<SQL.SQLName, SQL.FunctionSignaturesMap>)
     : UserViews =
     let phase1 =
-        Phase1Resolver(layout, defaultAttrs, forceAllowBroken, uvResolutionFlags, userViews, emptyFindExistingView)
+        Phase1Resolver(
+            layout,
+            defaultAttrs,
+            forceAllowBroken,
+            uvResolutionFlags,
+            userViews,
+            emptyFindExistingView,
+            pgFunctions
+        )
 
     phase1.ResolveUserViews()
 
@@ -145,6 +159,7 @@ let resolveAnonymousUserView
     (isPrivileged: bool)
     (defaultAttrs: MergedDefaultAttributes)
     (findExistingView: FindExistingView)
+    (pgFunctions: Map<SQL.SQLName, SQL.FunctionSignaturesMap>)
     (homeSchema: SchemaName option)
     (q: string)
     : ResolvedUserView =
@@ -156,7 +171,8 @@ let resolveAnonymousUserView
             { emptyExprResolutionFlags with
                 Privileged = isPrivileged },
             emptyGeneratedUserViews,
-            findExistingView
+            findExistingView,
+            pgFunctions
         )
 
     phase1.ResolveUserView homeSchema { Query = q; AllowBroken = false }

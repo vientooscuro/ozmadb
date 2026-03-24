@@ -25,6 +25,7 @@ namespace OzmaDBSchema.PgCatalog
         public DbSet<OpClass> OpClasses { get; set; } = null!;
         public DbSet<Am> Ams { get; set; } = null!;
         public DbSet<Role> Roles { get; set; } = null!;
+        public DbSet<PgType> Types { get; set; } = null!;
 
         public PgCatalogContext()
             : base()
@@ -80,6 +81,75 @@ namespace OzmaDBSchema.PgCatalog
                     property.SetColumnName(property.GetColumnName(storeObjectId)!.ToLower());
                 }
             }
+        }
+
+        public async Task<IEnumerable<PgCatalogFunction>> GetPgCatalogFunctions(CancellationToken cancellationToken)
+        {
+            // Dangerous/privileged functions that should never be exposed to users.
+            var blacklist = new HashSet<string>
+            {
+                "pg_read_file", "pg_read_binary_file", "pg_ls_dir", "pg_stat_file",
+                "pg_sleep", "pg_cancel_backend", "pg_terminate_backend",
+                "pg_reload_conf", "pg_rotate_logfile", "pg_switch_wal",
+                "pg_start_backup", "pg_stop_backup", "pg_create_restore_point",
+                "lo_import", "lo_export", "lo_creat", "lo_create", "lo_unlink",
+                "pg_relation_filepath", "pg_filenode_relation",
+            };
+
+            var pgNsOid = await this.Namespaces
+                .Where(ns => ns.NspName == "pg_catalog")
+                .Select(ns => ns.Oid)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (pgNsOid == 0)
+                return Enumerable.Empty<PgCatalogFunction>();
+
+            var types = await this.Types
+                .AsNoTracking()
+                .Where(t => t.TypType == 'b' || t.TypType == 'd' || t.TypType == 'e')
+                .ToDictionaryAsync(t => t.Oid, t => t.TypName, cancellationToken);
+
+            var procs = await this.Procs
+                .AsNoTracking()
+                .Where(p =>
+                    p.ProNamespace == pgNsOid &&
+                    !p.ProRetSet &&
+                    p.ProVolatile != 'v' &&
+                    p.ProNArgs >= 0)
+                .Select(p => new { p.ProName, p.ProRetType, p.ProArgTypes, p.ProVolatile })
+                .ToListAsync(cancellationToken);
+
+            var result = new List<PgCatalogFunction>();
+            foreach (var proc in procs)
+            {
+                if (blacklist.Contains(proc.ProName))
+                    continue;
+                if (!types.TryGetValue(proc.ProRetType, out var retTypName))
+                    continue;
+                var argTypes = proc.ProArgTypes ?? Array.Empty<uint>();
+                var argTypNames = new string[argTypes.Length];
+                bool allKnown = true;
+                for (int i = 0; i < argTypes.Length; i++)
+                {
+                    if (!types.TryGetValue(argTypes[i], out var argTypName))
+                    {
+                        allKnown = false;
+                        break;
+                    }
+                    argTypNames[i] = argTypName;
+                }
+                if (!allKnown)
+                    continue;
+
+                result.Add(new PgCatalogFunction
+                {
+                    Name = proc.ProName,
+                    RetTypName = retTypName,
+                    ArgTypNames = argTypNames,
+                    Volatile = proc.ProVolatile,
+                });
+            }
+            return result;
         }
 
         public async Task<IEnumerable<Namespace>> GetObjects(CancellationToken cancellationToken)
@@ -286,12 +356,12 @@ namespace OzmaDBSchema.PgCatalog
         [ForeignKey("AttRelId")]
         public Class? RelClass { get; set; }
         [ForeignKey("AttTypId")]
-        public Type? Type { get; set; }
+        public PgType? Type { get; set; }
 
         public AttrDef? AttrDef { get; set; }
     }
 
-    public class Type
+    public class PgType
     {
         [Column(TypeName = "oid")]
         [Key]
@@ -408,15 +478,25 @@ namespace OzmaDBSchema.PgCatalog
         public string ProSrc { get; set; } = null!;
         [Column(TypeName = "oid")]
         public uint ProOwner { get; set; }
+        [Column(TypeName = "oid[]")]
+        public uint[]? ProArgTypes { get; set; }
 
         [ForeignKey("ProNamespace")]
         public Namespace? Namespace { get; set; }
         [ForeignKey("ProLang")]
         public Language? Language { get; set; }
         [ForeignKey("ProRetType")]
-        public Type? RetType { get; set; }
+        public PgType? RetType { get; set; }
         [ForeignKey("ProOwner")]
         public Role? Owner { get; set; }
+    }
+
+    public class PgCatalogFunction
+    {
+        public string Name { get; set; } = null!;
+        public string RetTypName { get; set; } = null!;
+        public string[] ArgTypNames { get; set; } = null!;
+        public char Volatile { get; set; }
     }
 
     [Flags]

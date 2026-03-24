@@ -7,6 +7,7 @@ open OzmaDB.OzmaUtils.Reflection
 open OzmaDB.OzmaUtils
 
 open OzmaDB.SQL.AST
+open OzmaDBSchema.PgCatalog
 
 // Most of this information is manually taken from pg_catalog. OzmaDB doesn't support working with arbitrary user-(re)defined operators and functions.
 
@@ -232,6 +233,38 @@ let sqlKnownFunctions: Map<FunctionName, FunctionSignaturesMap> =
           (SQLName "generate_series", generateSeriesSignatures)
           // Window
           (SQLName "row_number", funToSignatures [ ([||], HTScalar(Some STInt)) ]) ]
+
+// Build a function signatures map from pg_catalog proc entries.
+// Functions already in sqlKnownFunctions are skipped (manual definitions take precedence).
+// Only functions where all arg/return types map to known SimpleTypes are included.
+let buildPgCatalogFunctions (procs: PgCatalogFunction seq) : Map<FunctionName, FunctionSignaturesMap> =
+    let tryMapType (typName: string) : SimpleType option = findSimpleType (SQLRawString typName)
+
+    let tryBuildSignature (proc: PgCatalogFunction) : (FunctionName * FunctionSignaturesMap) option =
+        let name = SQLName proc.Name
+
+        if Map.containsKey name sqlKnownFunctions then
+            None
+        else
+            match tryMapType proc.RetTypName with
+            | None -> None
+            | Some retTyp ->
+                let argTyps =
+                    proc.ArgTypNames |> Seq.traverseOption tryMapType |> Option.map Array.ofSeq
+
+                match argTyps with
+                | None -> None
+                | Some args ->
+                    let sig_ = funScalarsToSignatures [ (Array.toList args, retTyp) ]
+                    Some(name, sig_)
+
+    procs
+    |> Seq.choose tryBuildSignature
+    |> Seq.groupBy fst
+    |> Seq.map (fun (name, overloads) ->
+        let merged = overloads |> Seq.map snd |> Seq.fold Map.union Map.empty
+        (name, merged))
+    |> Map.ofSeq
 
 let private binScalarsToSignatures (signs: ((SimpleType * SimpleType) * SimpleType) seq) : BinaryOperatorSignaturesMap =
     signs

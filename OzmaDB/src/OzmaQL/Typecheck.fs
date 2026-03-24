@@ -99,7 +99,25 @@ let private tryCheckKnownSqlFunction
         | None -> None
         | Some(_, ret) -> Some <| decompileFieldType ret
 
-let private checkFunc (name: FunctionName) (args: (ResolvedFieldType option) seq) : ResolvedFieldType option =
+let private tryCheckPgCatalogFunction
+    (pgFunctions: Map<SQL.SQLName, SQL.FunctionSignaturesMap>)
+    (sqlName: SQL.SQLName)
+    (args: (ResolvedFieldType option) seq)
+    : ResolvedFieldType option =
+    match Map.tryFind sqlName pgFunctions with
+    | None -> None
+    | Some overloads ->
+        let sqlArgs = args |> Seq.map (Option.map compileFieldType) |> Seq.toArray
+
+        match SQL.findFunctionOverloads overloads sqlArgs with
+        | None -> None
+        | Some(_, ret) -> Some <| decompileFieldType ret
+
+let private checkFunc
+    (pgFunctions: Map<SQL.SQLName, SQL.FunctionSignaturesMap>)
+    (name: FunctionName)
+    (args: (ResolvedFieldType option) seq)
+    : ResolvedFieldType option =
     try
         if name = requestLinesNumberFunction then
             let argsArr = args |> Seq.toArray
@@ -147,7 +165,12 @@ let private checkFunc (name: FunctionName) (args: (ResolvedFieldType option) seq
                 match unionTypes args with
                 | Some ret -> Some ret
                 | None -> raisef ViewTypecheckException "Cannot unify values of different types"
-            | None -> tryCheckKnownSqlFunction (SQL.SQLName <| string name) args
+            | None ->
+                let sqlName = SQL.SQLName <| string name
+
+                match tryCheckKnownSqlFunction sqlName args with
+                | Some ret -> Some ret
+                | None -> tryCheckPgCatalogFunction pgFunctions sqlName args
     with e ->
         raisefWithInner
             ViewTypecheckException
@@ -212,7 +235,7 @@ let resolvedRefType (layout: ILayoutBits) (linked: LinkedBoundFieldRef) : Resolv
         let field = entity.FindField lastField.Name |> Option.get
         Some <| resolvedFieldType field.Field
 
-type private Typechecker(layout: ILayoutBits) =
+type private Typechecker(layout: ILayoutBits, pgFunctions: Map<SQL.SQLName, SQL.FunctionSignaturesMap>) =
     let rec typecheckBinaryLogical (a: ResolvedFieldExpr) (b: ResolvedFieldExpr) : ResolvedFieldType =
         let ta = typecheckFieldExpr a
 
@@ -366,7 +389,7 @@ type private Typechecker(layout: ILayoutBits) =
             Some <| FTScalar SFTJson
         | FEFunc(name, args) ->
             let argTypes = Seq.map typecheckFieldExpr args
-            checkFunc name argTypes
+            checkFunc pgFunctions name argTypes
         | FEWindowFunc(name, args, window) ->
             Array.iter (typecheckFieldExpr >> ignore) args
             Array.iter (typecheckFieldExpr >> ignore) window.PartitionBy
@@ -386,5 +409,13 @@ type private Typechecker(layout: ILayoutBits) =
     member this.TypecheckFieldExpr expr = typecheckFieldExpr expr
 
 let typecheckFieldExpr (layout: ILayoutBits) (expr: ResolvedFieldExpr) : ResolvedFieldType option =
-    let resolver = Typechecker layout
+    let resolver = Typechecker(layout, Map.empty)
+    resolver.TypecheckFieldExpr expr
+
+let typecheckFieldExprWithPgFunctions
+    (layout: ILayoutBits)
+    (pgFunctions: Map<SQL.SQLName, SQL.FunctionSignaturesMap>)
+    (expr: ResolvedFieldExpr)
+    : ResolvedFieldType option =
+    let resolver = Typechecker(layout, pgFunctions)
     resolver.TypecheckFieldExpr expr

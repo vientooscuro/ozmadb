@@ -1634,7 +1634,8 @@ type ResolveCallbacks =
     { Layout: ILayoutBits
       HomeSchema: SchemaName option
       GetDefaultAttribute: GetDefaultAttribute
-      HasUserView: HasUserView }
+      HasUserView: HasUserView
+      PgFunctions: Map<SQL.SQLName, SQL.FunctionSignaturesMap> }
 
 let emptyGetDefaultAttribute (fieldRef: ResolvedFieldRef) (name: AttributeName) : DefaultAttribute option = None
 let emptyHasUserView (ref: ResolvedUserViewRef) = false
@@ -1643,7 +1644,8 @@ let resolveCallbacks (layout: ILayoutBits) : ResolveCallbacks =
     { Layout = layout
       HomeSchema = None
       GetDefaultAttribute = emptyGetDefaultAttribute
-      HasUserView = emptyHasUserView }
+      HasUserView = emptyHasUserView
+      PgFunctions = Map.empty }
 
 let private boundValueToDomain: BoundValue -> BoundValue =
     function
@@ -1661,7 +1663,9 @@ type private UnresolvedBoundColumn =
     | UBCHeader of BoundColumnHeader
 
 type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgument, resolveFlags: ExprResolutionFlags) =
-    let { Layout = layout } = callbacks
+    let { Layout = layout
+          PgFunctions = pgFunctions } =
+        callbacks
 
     let mutable isPrivileged = false
 
@@ -2222,16 +2226,24 @@ type private QueryResolver(callbacks: ResolveCallbacks, findArgument: FindArgume
             else if name = nowFunction && Array.isEmpty args then
                 Some(FTScalar SFTDateTime)
             else
-                match Map.tryFind (SQL.SQLName <| string name) SQL.sqlKnownFunctions with
-                | Some overloads ->
-                    let sqlArgs =
-                        args
-                        |> Array.map (fun arg -> tryInferResolvedFieldExprType arg |> Option.map compileFieldType)
+                let sqlName = SQL.SQLName <| string name
 
+                let sqlArgs =
+                    args
+                    |> Array.map (fun arg -> tryInferResolvedFieldExprType arg |> Option.map compileFieldType)
+
+                match Map.tryFind sqlName SQL.sqlKnownFunctions with
+                | Some overloads ->
                     match SQL.findFunctionOverloads overloads sqlArgs with
                     | None -> None
                     | Some(_, ret) -> Some <| decompileFieldType ret
-                | None -> None
+                | None ->
+                    match Map.tryFind sqlName pgFunctions with
+                    | Some overloads ->
+                        match SQL.findFunctionOverloads overloads sqlArgs with
+                        | None -> None
+                        | Some(_, ret) -> Some <| decompileFieldType ret
+                    | None -> None
         | FEWindowFunc(name, args, _) ->
             match Map.tryFind (SQL.SQLName <| string name) SQL.sqlKnownFunctions with
             | Some overloads ->
