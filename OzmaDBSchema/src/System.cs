@@ -702,6 +702,9 @@ namespace OzmaDBSchema.System
         public bool AllowBroken { get; set; }
 
         [ColumnField("bool", Default = "false")]
+        public bool AllowAllFields { get; set; }
+
+        [ColumnField("bool", Default = "false")]
         public bool Insert { get; set; }
 
         [ColumnField("string")]

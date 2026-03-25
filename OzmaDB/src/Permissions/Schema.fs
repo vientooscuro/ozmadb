@@ -29,6 +29,7 @@ let private makeSourceAllowedEntity (entity: RoleEntity) : SourceAllowedEntity =
 
     { Fields = fields
       AllowBroken = entity.AllowBroken
+      AllowAllFields = entity.AllowAllFields
       Check = Option.ofObj entity.Check
       Insert = entity.Insert
       Select = Option.ofObj entity.Select

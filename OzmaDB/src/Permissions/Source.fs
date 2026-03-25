@@ -13,6 +13,7 @@ type SourceAllowedField =
 
 type SourceAllowedEntity =
     { AllowBroken: bool
+      AllowAllFields: bool
       Check: string option
       Insert: bool
       Select: string option

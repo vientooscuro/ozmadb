@@ -172,6 +172,20 @@ type private RoleResolver
           Select = resolveOne true allowedField.Select
           Check = resolveOne false allowedField.Check }
 
+    let resolveAllowAllField (fieldRef: ResolvedFieldRef) (entity: ResolvedEntity) : AllowedField =
+        let field =
+            match Map.tryFind fieldRef.Name entity.ColumnFields with
+            | None -> raisef ResolvePermissionsException "Unknown field"
+            | Some f -> f
+
+        if Option.isSome field.InheritedFrom then
+            raisef ResolvePermissionsException "Cannot define restrictions on parent entity fields in children"
+
+        { Insert = true
+          Update = OFETrue
+          Select = OFETrue
+          Check = OFETrue }
+
     let resolveSelfAllowedEntity
         (entityRef: ResolvedEntityRef)
         (entity: ResolvedEntity)
@@ -202,7 +216,26 @@ type private RoleResolver
         let delete =
             propagateFromParent (fun pent -> Result.defaultValue OFEFalse pent.Delete) true allowedEntity.Delete
 
-        let fields = allowedEntity.Fields |> Map.map mapField
+        let fields =
+            if allowedEntity.AllowAllFields then
+                // Blacklist mode: start with all entity fields allowed, then apply explicit overrides.
+                let allFields =
+                    entity.ColumnFields
+                    |> Map.filter (fun name field -> Option.isNone field.InheritedFrom)
+                    |> Map.map (fun name _field ->
+                        let fieldRef = { Entity = entityRef; Name = name }
+
+                        try
+                            resolveAllowAllField fieldRef entity
+                        with e ->
+                            raisefWithInner ResolvePermissionsException e "In allowed field %O" name)
+                // Apply explicit overrides (blacklist entries) on top.
+                Map.fold
+                    (fun acc name allowedField -> Map.add name (mapField name allowedField) acc)
+                    allFields
+                    allowedEntity.Fields
+            else
+                allowedEntity.Fields |> Map.map mapField
 
         { AllowBroken = allowedEntity.AllowBroken
           Fields = fields
