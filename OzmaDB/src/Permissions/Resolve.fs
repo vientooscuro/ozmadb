@@ -120,7 +120,11 @@ type private RoleResolver
     let defaultAllowedEntity: SourceAllowedEntity =
         { AllowBroken = false
           AllowAllFields = true
-          Check = None
+          Check =
+            if allowAllInsert || allowAllUpdate then
+                Some "true"
+            else
+                None
           Insert = allowAllInsert
           Select = Some "true"
           Update = if allowAllUpdate then Some "true" else None
