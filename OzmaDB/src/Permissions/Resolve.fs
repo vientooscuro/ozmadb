@@ -99,12 +99,28 @@ let private unionFlatAllowedDatabases: FlatAllowedDatabase -> FlatAllowedDatabas
 let private unionFlatRoles (a: FlatRole) (b: FlatRole) : FlatRole =
     { Entities = unionFlatAllowedDatabases a.Entities b.Entities }
 
+// System schemas that must never be auto-granted by allow_all_entities.
+let private systemSchemas: Set<SchemaName> =
+    Set.ofList [ OzmaQLName "public"; OzmaQLName "funapp" ]
+
+// Default SourceAllowedEntity used when allow_all_entities=true and no explicit record exists.
+let private defaultAllowedEntity: SourceAllowedEntity =
+    { AllowBroken = false
+      AllowAllFields = true
+      Check = None
+      Insert = false
+      Select = Some "true"
+      Update = None
+      Delete = None
+      Fields = Map.empty }
+
 type private RoleResolver
     (
         layout: Layout,
         forceAllowBroken: bool,
         hasUserView: HasUserView,
         allowedDb: SourceAllowedDatabase,
+        allowAllEntities: bool,
         roleSchema: SchemaName
     ) =
     let defaultCallbacks = resolveCallbacks layout
@@ -447,7 +463,60 @@ type private RoleResolver
             with e ->
                 raisefWithInner ResolvePermissionsException e "In allowed schema %O" name
 
-        { Schemas = allowedDb.Schemas |> Map.map mapSchema }
+        let explicitSchemas = allowedDb.Schemas |> Map.map mapSchema
+
+        if not allowAllEntities then
+            { Schemas = explicitSchemas }
+        else
+            // For each non-system schema in layout, resolve any entities not already explicitly listed.
+            let autoSchemas =
+                layout.Schemas
+                |> Map.toSeq
+                |> Seq.filter (fun (name, _) -> not (Set.contains name systemSchemas))
+                |> Seq.choose (fun (schemaName, layoutSchema) ->
+                    let explicitEntities =
+                        match Map.tryFind schemaName explicitSchemas with
+                        | None -> Map.empty
+                        | Some s -> s.Entities
+
+                    let autoEntities =
+                        layoutSchema.Entities
+                        |> Map.toSeq
+                        |> Seq.filter (fun (name, entity) ->
+                            not entity.IsHidden && not (Map.containsKey name explicitEntities))
+                        |> Seq.choose (fun (name, _entity) ->
+                            let entityRef = { Schema = schemaName; Name = name }
+
+                            try
+                                let resolved =
+                                    resolveAllowedEntity entityRef defaultAllowedEntity
+                                    |> Result.map (fun r -> r.Allowed)
+
+                                Some(name, resolved)
+                            with e ->
+                                // Skip entities that fail to resolve in auto mode.
+                                None)
+                        |> Map.ofSeq
+
+                    if Map.isEmpty autoEntities then
+                        None
+                    else
+                        Some(schemaName, autoEntities))
+                |> Map.ofSeq
+
+            // Merge: explicit entries take priority; auto entries fill the rest.
+            let mergedSchemas =
+                Map.fold
+                    (fun (acc: Map<SchemaName, AllowedSchema>) schemaName autoSchema ->
+                        match Map.tryFind schemaName acc with
+                        | None -> Map.add schemaName { Entities = autoSchema } acc
+                        | Some existing ->
+                            let merged = Map.fold (fun m k v -> Map.add k v m) existing.Entities autoSchema
+                            Map.add schemaName { Entities = merged } acc)
+                    explicitSchemas
+                    autoSchemas
+
+            { Schemas = mergedSchemas }
 
     member this.ResolveAllowedDatabase() = resolveAllowedDatabase ()
     member this.Flattened = flattened
@@ -478,7 +547,7 @@ type private Phase1Resolver
             | Error e -> raisefWithInner ResolvePermissionsParentException e.Error "Error in parent %O" parentRef
 
         let resolver =
-            RoleResolver(layout, forceAllowBroken, hasUserView, role.Permissions, ref.Schema)
+            RoleResolver(layout, forceAllowBroken, hasUserView, role.Permissions, role.AllowAllEntities, ref.Schema)
 
         let flattenedParents =
             role.Parents

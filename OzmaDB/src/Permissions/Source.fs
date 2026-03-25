@@ -35,7 +35,8 @@ type SourceAllowedDatabase =
 type SourceRole =
     { Parents: Set<ResolvedRoleRef>
       Permissions: SourceAllowedDatabase
-      AllowBroken: bool }
+      AllowBroken: bool
+      AllowAllEntities: bool }
 
 type SourcePermissionsSchema = { Roles: Map<RoleName, SourceRole> }
 

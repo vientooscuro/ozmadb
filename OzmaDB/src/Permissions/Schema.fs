@@ -56,7 +56,8 @@ let private makeSourceRole (role: Role) : SourceRole =
               Name = OzmaQLName role.Parent.Name })
         |> Set.ofSeqUnique
       Permissions = makeSourceAllowedDatabase role
-      AllowBroken = role.AllowBroken }
+      AllowBroken = role.AllowBroken
+      AllowAllEntities = role.AllowAllEntities }
 
 let private makeSourcePermissionsSchema (schema: Schema) : SourcePermissionsSchema =
     { Roles =
