@@ -567,14 +567,25 @@ type private Phase1Resolver
             |> Seq.map resolveParent
             |> Seq.fold unionFlatRoles emptyFlatRole
 
-        let resolved = resolver.ResolveAllowedDatabase()
+        let resolvedDb = resolver.ResolveAllowedDatabase()
 
         let flattened =
             { Entities = Map.map (fun name roleEntity -> { Roles = Map.singleton ref roleEntity }) resolver.Flattened }
 
+        // Collect denied user views from all parents (union) plus this role's own.
+        let parentDeniedUserViews =
+            role.Parents
+            |> Set.toSeq
+            |> Seq.collect (fun parentRef ->
+                match Map.tryFind parentRef resolved with
+                | Some(Ok r) -> r.DeniedUserViews |> Set.toSeq
+                | _ -> Seq.empty)
+            |> Set.ofSeq
+
         { Parents = role.Parents
-          Permissions = resolved
-          Flattened = unionFlatRoles flattenedParents flattened }
+          Permissions = resolvedDb
+          Flattened = unionFlatRoles flattenedParents flattened
+          DeniedUserViews = Set.union parentDeniedUserViews role.DeniedUserViews }
 
     and resolveRole
         (stack: Set<ResolvedRoleRef>)

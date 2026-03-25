@@ -123,14 +123,16 @@ type FlatRole = { Entities: FlatAllowedDatabase }
 type ResolvedRole =
     { Parents: Set<ResolvedRoleRef>
       Permissions: AllowedDatabase
-      Flattened: FlatRole }
+      Flattened: FlatRole
+      DeniedUserViews: Set<ResolvedUserViewRef> }
 
 let emptyFlatRole = { Entities = Map.empty }
 
 let emptyResolvedRole =
     { Parents = Set.empty
       Permissions = emptyAllowedDatabase
-      Flattened = emptyFlatRole }
+      Flattened = emptyFlatRole
+      DeniedUserViews = Set.empty }
 
 [<NoEquality; NoComparison>]
 type PermissionsSchema =

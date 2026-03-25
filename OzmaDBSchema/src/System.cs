@@ -103,6 +103,10 @@ namespace OzmaDBSchema.System
         [UniqueConstraint("name", new[] { "role_entity_id", "column_name" }, IsAlternateKey = true)]
         public DbSet<RoleColumnField> RoleColumnFields { get; set; } = null!;
 
+        [Entity("id", SaveRestoreKey = "entry", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, TriggersMigration = true)]
+        [UniqueConstraint("entry", new[] { "role_id", "user_view_id" }, IsAlternateKey = true)]
+        public DbSet<RoleDeniedUserView> RoleDeniedUserViews { get; set; } = null!;
+
         [Entity("full_name", SaveRestoreKey = "name", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, TriggersMigration = true)]
         [ComputedField("full_name", "schema_id=>__main || '.' || field_entity_id=>__main || '.' || field_name")]
         [UniqueConstraint("name", new[] { "schema_id", "field_entity_id", "field_name" }, IsAlternateKey = true)]
@@ -271,7 +275,8 @@ namespace OzmaDBSchema.System
                 .AsSplitQuery()
                 .Include(sch => sch.Roles!).ThenInclude(role => role.Parents!).ThenInclude(roleParent => roleParent.Parent!).ThenInclude(role => role.Schema)
                 .Include(sch => sch.Roles!).ThenInclude(role => role.Entities!).ThenInclude(roleEnt => roleEnt.Entity!).ThenInclude(ent => ent.Schema)
-                .Include(sch => sch.Roles!).ThenInclude(role => role.Entities!).ThenInclude(roleEnt => roleEnt.ColumnFields);
+                .Include(sch => sch.Roles!).ThenInclude(role => role.Entities!).ThenInclude(roleEnt => roleEnt.ColumnFields)
+                .Include(sch => sch.Roles!).ThenInclude(role => role.DeniedUserViews!).ThenInclude(d => d.UserView!).ThenInclude(uv => uv.Schema);
         }
 
         public IQueryable<Schema> GetAttributesObjects()
@@ -674,6 +679,7 @@ namespace OzmaDBSchema.System
         public List<RoleParent>? Parents { get; set; }
         public List<RoleParent>? Children { get; set; }
         public List<RoleEntity>? Entities { get; set; }
+        public List<RoleDeniedUserView>? DeniedUserViews { get; set; }
     }
 
     public class RoleParent
@@ -749,6 +755,19 @@ namespace OzmaDBSchema.System
 
         [ColumnField("string")]
         public string? Check { get; set; }
+    }
+
+    public class RoleDeniedUserView
+    {
+        public int Id { get; set; }
+
+        [ColumnField("reference(public.roles) on delete cascade")]
+        public int RoleId { get; set; }
+        public Role? Role { get; set; }
+
+        [ColumnField("reference(public.user_views) on delete cascade")]
+        public int UserViewId { get; set; }
+        public UserView? UserView { get; set; }
     }
 
     public class FieldAttributes

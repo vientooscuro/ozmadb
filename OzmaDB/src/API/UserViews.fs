@@ -71,6 +71,21 @@ type UserViewsAPI(api: IOzmaDBAPI) =
     let ctx = rctx.Context
     let logger = ctx.LoggerFactory.CreateLogger<UserViewsAPI>()
 
+    let checkDeniedUserView (ref: ResolvedUserViewRef) : Result<unit, UserViewErrorInfo> =
+        match rctx.User.Effective.Type with
+        | RTRoot -> Ok()
+        | RTRole role when role.CanRead -> Ok()
+        | RTRole role ->
+            let deniedViews =
+                match role.Role with
+                | None -> Set.empty
+                | Some r -> r.DeniedUserViews
+
+            if Set.contains ref deniedViews then
+                Error(UVEAccessDenied(sprintf "Access to user view %O is denied" ref))
+            else
+                Ok()
+
     let resolveSource
         (source: UserViewSource)
         (flags: UserViewFlags)
@@ -87,26 +102,30 @@ type UserViewsAPI(api: IOzmaDBAPI) =
 
                     return Ok anon
                 | UVNamed ref ->
-                    if flags.ForceRecompile then
-                        let! uv =
-                            ctx.Transaction.System.UserViews
-                                .AsQueryable()
-                                .Where(fun uv -> uv.Schema.Name = string ref.Schema && uv.Name = string ref.Name)
-                                .FirstOrDefaultAsync(ctx.CancellationToken)
+                    match checkDeniedUserView ref with
+                    | Error e -> return Error e
+                    | Ok() ->
 
-                        if isNull uv then
-                            return Error UVENotFound
+                        if flags.ForceRecompile then
+                            let! uv =
+                                ctx.Transaction.System.UserViews
+                                    .AsQueryable()
+                                    .Where(fun uv -> uv.Schema.Name = string ref.Schema && uv.Name = string ref.Name)
+                                    .FirstOrDefaultAsync(ctx.CancellationToken)
+
+                            if isNull uv then
+                                return Error UVENotFound
+                            else
+                                let! anon = ctx.ResolveAnonymousView true (Some ref.Schema) uv.Query
+                                return Ok <| applyFlags flags anon
                         else
-                            let! anon = ctx.ResolveAnonymousView true (Some ref.Schema) uv.Query
-                            return Ok <| applyFlags flags anon
-                    else
-                        match ctx.UserViews.Find ref with
-                        | None -> return Error UVENotFound
-                        | Some(Error e) ->
-                            logger.LogError(e.Error, "Requested user view {uv} is broken", ref)
-                            let msg = sprintf "User view %O is broken: %s" ref (fullUserMessage e.Error)
-                            return Error <| UVEOther msg
-                        | Some(Ok cached) -> return Ok <| applyFlags flags cached
+                            match ctx.UserViews.Find ref with
+                            | None -> return Error UVENotFound
+                            | Some(Error e) ->
+                                logger.LogError(e.Error, "Requested user view {uv} is broken", ref)
+                                let msg = sprintf "User view %O is broken: %s" ref (fullUserMessage e.Error)
+                                return Error <| UVEOther msg
+                            | Some(Ok cached) -> return Ok <| applyFlags flags cached
             with
             | :? UserViewResolveException as ex when ex.IsUserException ->
                 logger.LogError(ex, "Failed to compile user view {uv}", source)

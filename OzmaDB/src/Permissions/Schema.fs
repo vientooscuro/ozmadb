@@ -57,7 +57,13 @@ let private makeSourceRole (role: Role) : SourceRole =
         |> Set.ofSeqUnique
       Permissions = makeSourceAllowedDatabase role
       AllowBroken = role.AllowBroken
-      AllowAllEntities = role.AllowAllEntities }
+      AllowAllEntities = role.AllowAllEntities
+      DeniedUserViews =
+        role.DeniedUserViews
+        |> Seq.map (fun d ->
+            { Schema = OzmaQLName d.UserView.Schema.Name
+              Name = OzmaQLName d.UserView.Name })
+        |> Set.ofSeq }
 
 let private makeSourcePermissionsSchema (schema: Schema) : SourcePermissionsSchema =
     { Roles =
