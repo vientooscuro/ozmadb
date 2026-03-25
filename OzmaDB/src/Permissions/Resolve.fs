@@ -188,7 +188,7 @@ type private RoleResolver
           Select = resolveOne true allowedField.Select
           Check = resolveOne false allowedField.Check }
 
-    let resolveAllowAllField (fieldRef: ResolvedFieldRef) (entity: ResolvedEntity) : AllowedField =
+    let resolveAllowAllField (entityInsert: bool) (fieldRef: ResolvedFieldRef) (entity: ResolvedEntity) : AllowedField =
         let field =
             match Map.tryFind fieldRef.Name entity.ColumnFields with
             | None -> raisef ResolvePermissionsException "Unknown field"
@@ -197,7 +197,7 @@ type private RoleResolver
         if Option.isSome field.InheritedFrom then
             raisef ResolvePermissionsException "Cannot define restrictions on parent entity fields in children"
 
-        { Insert = true
+        { Insert = entityInsert
           Update = OFETrue
           Select = OFETrue
           Check = OFETrue }
@@ -242,7 +242,7 @@ type private RoleResolver
                         let fieldRef = { Entity = entityRef; Name = name }
 
                         try
-                            resolveAllowAllField fieldRef entity
+                            resolveAllowAllField allowedEntity.Insert fieldRef entity
                         with e ->
                             raisefWithInner ResolvePermissionsException e "In allowed field %O" name)
                 // Apply explicit overrides (blacklist entries) on top.
