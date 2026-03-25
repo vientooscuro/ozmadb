@@ -676,6 +676,15 @@ namespace OzmaDBSchema.System
         [ColumnField("bool", Default = "false")]
         public bool AllowAllEntities { get; set; }
 
+        [ColumnField("bool", Default = "false")]
+        public bool AllowAllInsert { get; set; }
+
+        [ColumnField("bool", Default = "false")]
+        public bool AllowAllUpdate { get; set; }
+
+        [ColumnField("bool", Default = "false")]
+        public bool AllowAllDelete { get; set; }
+
         public List<RoleParent>? Parents { get; set; }
         public List<RoleParent>? Children { get; set; }
         public List<RoleEntity>? Entities { get; set; }

@@ -103,17 +103,6 @@ let private unionFlatRoles (a: FlatRole) (b: FlatRole) : FlatRole =
 let private systemSchemas: Set<SchemaName> =
     Set.ofList [ OzmaQLName "public"; OzmaQLName "funapp" ]
 
-// Default SourceAllowedEntity used when allow_all_entities=true and no explicit record exists.
-let private defaultAllowedEntity: SourceAllowedEntity =
-    { AllowBroken = false
-      AllowAllFields = true
-      Check = None
-      Insert = false
-      Select = Some "true"
-      Update = None
-      Delete = None
-      Fields = Map.empty }
-
 type private RoleResolver
     (
         layout: Layout,
@@ -121,8 +110,23 @@ type private RoleResolver
         hasUserView: HasUserView,
         allowedDb: SourceAllowedDatabase,
         allowAllEntities: bool,
+        allowAllInsert: bool,
+        allowAllUpdate: bool,
+        allowAllDelete: bool,
         roleSchema: SchemaName
     ) =
+
+    // Default SourceAllowedEntity used when allow_all_entities=true and no explicit record exists.
+    let defaultAllowedEntity: SourceAllowedEntity =
+        { AllowBroken = false
+          AllowAllFields = true
+          Check = None
+          Insert = allowAllInsert
+          Select = Some "true"
+          Update = if allowAllUpdate then Some "true" else None
+          Delete = if allowAllDelete then Some "true" else None
+          Fields = Map.empty }
+
     let defaultCallbacks = resolveCallbacks layout
 
     let mutable resolved: Map<ResolvedEntityRef, PossiblyBroken<HalfAllowedEntity>> =
@@ -559,7 +563,17 @@ type private Phase1Resolver
             | Error e -> raisefWithInner ResolvePermissionsParentException e.Error "Error in parent %O" parentRef
 
         let resolver =
-            RoleResolver(layout, forceAllowBroken, hasUserView, role.Permissions, role.AllowAllEntities, ref.Schema)
+            RoleResolver(
+                layout,
+                forceAllowBroken,
+                hasUserView,
+                role.Permissions,
+                role.AllowAllEntities,
+                role.AllowAllInsert,
+                role.AllowAllUpdate,
+                role.AllowAllDelete,
+                ref.Schema
+            )
 
         let flattenedParents =
             role.Parents

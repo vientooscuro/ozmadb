@@ -58,6 +58,9 @@ let private makeSourceRole (role: Role) : SourceRole =
       Permissions = makeSourceAllowedDatabase role
       AllowBroken = role.AllowBroken
       AllowAllEntities = role.AllowAllEntities
+      AllowAllInsert = role.AllowAllInsert
+      AllowAllUpdate = role.AllowAllUpdate
+      AllowAllDelete = role.AllowAllDelete
       DeniedUserViews =
         role.DeniedUserViews
         |> Seq.map (fun d ->
