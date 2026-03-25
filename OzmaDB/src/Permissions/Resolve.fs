@@ -188,7 +188,13 @@ type private RoleResolver
           Select = resolveOne true allowedField.Select
           Check = resolveOne false allowedField.Check }
 
-    let resolveAllowAllField (entityInsert: bool) (fieldRef: ResolvedFieldRef) (entity: ResolvedEntity) : AllowedField =
+    let resolveAllowAllField
+        (entityInsert: bool)
+        (entityUpdate: ResolvedOptimizedFieldExpr)
+        (entityCheck: ResolvedOptimizedFieldExpr)
+        (fieldRef: ResolvedFieldRef)
+        (entity: ResolvedEntity)
+        : AllowedField =
         let field =
             match Map.tryFind fieldRef.Name entity.ColumnFields with
             | None -> raisef ResolvePermissionsException "Unknown field"
@@ -197,10 +203,16 @@ type private RoleResolver
         if Option.isSome field.InheritedFrom then
             raisef ResolvePermissionsException "Cannot define restrictions on parent entity fields in children"
 
+        // Field-level insert/update/check mirror entity-level permissions.
+        // This ensures that a read-only entity (insert=false, update=OFEFalse) does not
+        // trigger check requirements just because allow_all_fields=true.
+        let fieldUpdate = if optimizedIsFalse entityUpdate then OFEFalse else OFETrue
+        let fieldCheck = if optimizedIsFalse entityCheck then OFEFalse else OFETrue
+
         { Insert = entityInsert
-          Update = OFETrue
+          Update = fieldUpdate
           Select = OFETrue
-          Check = OFETrue }
+          Check = fieldCheck }
 
     let resolveSelfAllowedEntity
         (entityRef: ResolvedEntityRef)
@@ -242,7 +254,7 @@ type private RoleResolver
                         let fieldRef = { Entity = entityRef; Name = name }
 
                         try
-                            resolveAllowAllField allowedEntity.Insert fieldRef entity
+                            resolveAllowAllField allowedEntity.Insert update check fieldRef entity
                         with e ->
                             raisefWithInner ResolvePermissionsException e "In allowed field %O" name)
                 // Apply explicit overrides (blacklist entries) on top.
