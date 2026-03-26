@@ -58,6 +58,25 @@ let private queueDeleteByRootAndRow
         return ()
     }
 
+let private firedDeleteByRootAndRow
+    (query: QueryConnection)
+    (rootEntity: ResolvedEntityRef)
+    (rowId: int)
+    (cancellationToken: CancellationToken)
+    : Task =
+    task {
+        let q =
+            sprintf
+                "DELETE FROM %s WHERE root_entity_schema = %s AND root_entity_name = %s AND row_id = %s"
+                firedTableName
+                (SQL.renderSqlString (string rootEntity.Schema))
+                (SQL.renderSqlString (string rootEntity.Name))
+                (SQL.renderSqlInt rowId)
+
+        let! _ = query.ExecuteNonQuery q Map.empty cancellationToken
+        return ()
+    }
+
 let private enqueueSingleField
     (query: QueryConnection)
     (eventEntity: ResolvedEntityRef)
@@ -221,6 +240,7 @@ let scheduleRowTimeTriggers
             let byField = findMergedTriggersTime eventEntity triggers
 
             do! queueDeleteByRootAndRow query rootEntity rowId cancellationToken
+            do! firedDeleteByRootAndRow query rootEntity rowId cancellationToken
 
             for KeyValue(fieldName, mergedTriggers) in byField do
                 let columnName = (Map.find fieldName entity.ColumnFields).ColumnName
@@ -268,7 +288,9 @@ let removeRowTimeTriggers
     task {
         match layout.FindEntity eventEntity with
         | None -> return ()
-        | Some entity -> return! queueDeleteByRootAndRow query entity.Root rowId cancellationToken
+        | Some entity ->
+            do! queueDeleteByRootAndRow query entity.Root rowId cancellationToken
+            do! firedDeleteByRootAndRow query entity.Root rowId cancellationToken
     }
 
 let private parseClaimedTask (row: (SQL.SQLName * SQL.SimpleValueType * SQL.Value)[]) : ClaimedTimeTriggerTask =
