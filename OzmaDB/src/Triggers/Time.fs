@@ -144,12 +144,15 @@ SELECT
   %s,
   v.offset_value,
   v.offset_unit,
-  CASE v.offset_unit
-    WHEN 'MINUTES' THEN t.%s - make_interval(mins => v.offset_value)
-    WHEN 'HOURS' THEN t.%s - make_interval(hours => v.offset_value)
-    WHEN 'DAYS' THEN t.%s - make_interval(days => v.offset_value)
-    ELSE t.%s
-  END,
+  GREATEST(
+    CASE v.offset_unit
+      WHEN 'MINUTES' THEN t.%s - make_interval(mins => v.offset_value)
+      WHEN 'HOURS' THEN t.%s - make_interval(hours => v.offset_value)
+      WHEN 'DAYS' THEN t.%s - make_interval(days => v.offset_value)
+      ELSE t.%s
+    END,
+    transaction_timestamp()
+  ),
   NULL,
   0,
   NULL
@@ -157,14 +160,6 @@ FROM %s AS t
 JOIN (VALUES %s) AS v(trigger_schema, trigger_entity_schema, trigger_entity_name, trigger_name, offset_value, offset_unit) ON TRUE
 WHERE t.%s = %s
   AND t.%s IS NOT NULL
-  AND (
-    CASE v.offset_unit
-      WHEN 'MINUTES' THEN t.%s - make_interval(mins => v.offset_value)
-      WHEN 'HOURS' THEN t.%s - make_interval(hours => v.offset_value)
-      WHEN 'DAYS' THEN t.%s - make_interval(days => v.offset_value)
-      ELSE t.%s
-    END
-  ) > transaction_timestamp()
   AND NOT EXISTS (
     SELECT 1
     FROM %s AS fired
@@ -209,10 +204,6 @@ ON CONFLICT (
                     values
                     (SQL.renderSqlName "id")
                     (SQL.renderSqlInt rowId)
-                    (columnName.ToSQLString())
-                    (columnName.ToSQLString())
-                    (columnName.ToSQLString())
-                    (columnName.ToSQLString())
                     (columnName.ToSQLString())
                     firedTableName
                     (SQL.renderSqlString (string eventEntity.Schema))
