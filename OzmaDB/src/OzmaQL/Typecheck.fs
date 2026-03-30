@@ -47,6 +47,8 @@ let allowedFunctions: Map<FunctionName, FunctionRepr> =
           (OzmaQLName "ltrim", FRFunction <| SQL.SQLName "ltrim")
           (OzmaQLName "rtrim", FRFunction <| SQL.SQLName "rtrim")
           (OzmaQLName "btrim", FRFunction <| SQL.SQLName "btrim")
+          // SQL-style alias: trim(x) behaves as btrim(x).
+          (OzmaQLName "trim", FRFunction <| SQL.SQLName "btrim")
           (OzmaQLName "split_part", FRFunction <| SQL.SQLName "split_part")
           (OzmaQLName "replace", FRFunction <| SQL.SQLName "replace")
           (OzmaQLName "left", FRFunction <| SQL.SQLName "left")
