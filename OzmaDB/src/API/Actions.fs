@@ -42,24 +42,28 @@ type ActionsAPI(api: IOzmaDBAPI) =
                                 | Some role -> isActionPrivileged req.Action role
                                 | None -> false
 
-                        let runAction () =
+                        return!
                             rctx.RunWithSource(ESAction req.Action)
                             <| fun () ->
                                 task {
                                     let args = Option.defaultWith (fun () -> JObject()) req.Args
-                                    let! res = action.Run(args, ctx.CancellationToken)
-                                    return Ok { Result = res }
+
+                                    let runAction () =
+                                        task {
+                                            let! res = action.Run(args, ctx.CancellationToken)
+                                            return Ok { Result = res }
+                                        }
+
+                                    if shouldElevate then
+                                        let! result = rctx.PretendRole { AsRole = PRRoot } <| fun () -> runAction ()
+
+                                        return
+                                            match result with
+                                            | Ok r -> r
+                                            | Error _ -> failwith "Unexpected PretendRole error when elevating action"
+                                    else
+                                        return! runAction ()
                                 }
-
-                        if shouldElevate then
-                            let! result = rctx.PretendRole { AsRole = PRRoot } <| fun () -> runAction ()
-
-                            return
-                                match result with
-                                | Ok r -> r
-                                | Error _ -> failwith "Unexpected PretendRole error when elevating action"
-                        else
-                            return! runAction ()
                     with :? ActionRunException as e when e.IsUserException ->
                         logger.LogError(e, "Exception in action {action}", req.Action)
                         return Error(AEException(fullUserMessage e, e.UserData))

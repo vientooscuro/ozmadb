@@ -209,9 +209,9 @@ type EntitiesAPI(api: IOzmaDBAPI) =
 
         let preparedTrigger = ctx.FindTrigger ref |> Option.get
 
-        withTriggerElevation ref
+        rctx.RunWithSource(ESTrigger ref)
         <| fun () ->
-            rctx.RunWithSource(ESTrigger ref)
+            withTriggerElevation ref
             <| fun () ->
                 task {
                     try
@@ -256,9 +256,9 @@ type EntitiesAPI(api: IOzmaDBAPI) =
 
         let preparedTrigger = ctx.FindTrigger ref |> Option.get
 
-        withTriggerElevation ref
+        rctx.RunWithSource(ESTrigger ref)
         <| fun () ->
-            rctx.RunWithSource(ESTrigger ref)
+            withTriggerElevation ref
             <| fun () ->
                 task {
                     try
