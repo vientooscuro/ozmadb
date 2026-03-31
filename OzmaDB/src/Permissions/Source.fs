@@ -32,6 +32,18 @@ type SourceAllowedDatabase =
         | None -> None
         | Some schema -> Map.tryFind entity.Name schema.Entities
 
+// Identifies which actions/triggers a role may run with elevated (root) privileges.
+// Checked at action/trigger invocation time; matching means the code executes as RTRoot.
+type SourcePrivilegedActionRef =
+    | SPAAll
+    | SPASchema of SchemaName
+    | SPAAction of ResolvedEntityRef
+
+type SourcePrivilegedTriggerRef =
+    | SPTAll
+    | SPTSchema of SchemaName
+    | SPTTrigger of ResolvedEntityRef
+
 type SourceRole =
     { Parents: Set<ResolvedRoleRef>
       Permissions: SourceAllowedDatabase
@@ -40,7 +52,9 @@ type SourceRole =
       AllowAllInsert: bool
       AllowAllUpdate: bool
       AllowAllDelete: bool
-      DeniedUserViews: Set<ResolvedUserViewRef> }
+      DeniedUserViews: Set<ResolvedUserViewRef>
+      PrivilegedActions: Set<SourcePrivilegedActionRef>
+      PrivilegedTriggers: Set<SourcePrivilegedTriggerRef> }
 
 type SourcePermissionsSchema = { Roles: Map<RoleName, SourceRole> }
 

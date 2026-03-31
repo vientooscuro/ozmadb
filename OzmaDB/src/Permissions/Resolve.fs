@@ -600,10 +600,31 @@ type private Phase1Resolver
                 | _ -> Seq.empty)
             |> Set.ofSeq
 
+        // Collect privileged actions/triggers from all parents (union) plus this role's own.
+        let parentPrivilegedActions =
+            role.Parents
+            |> Set.toSeq
+            |> Seq.collect (fun parentRef ->
+                match Map.tryFind parentRef resolved with
+                | Some(Ok r) -> r.PrivilegedActions |> Set.toSeq
+                | _ -> Seq.empty)
+            |> Set.ofSeq
+
+        let parentPrivilegedTriggers =
+            role.Parents
+            |> Set.toSeq
+            |> Seq.collect (fun parentRef ->
+                match Map.tryFind parentRef resolved with
+                | Some(Ok r) -> r.PrivilegedTriggers |> Set.toSeq
+                | _ -> Seq.empty)
+            |> Set.ofSeq
+
         { Parents = role.Parents
           Permissions = resolvedDb
           Flattened = unionFlatRoles flattenedParents flattened
-          DeniedUserViews = Set.union parentDeniedUserViews role.DeniedUserViews }
+          DeniedUserViews = Set.union parentDeniedUserViews role.DeniedUserViews
+          PrivilegedActions = Set.union parentPrivilegedActions role.PrivilegedActions
+          PrivilegedTriggers = Set.union parentPrivilegedTriggers role.PrivilegedTriggers }
 
     and resolveRole
         (stack: Set<ResolvedRoleRef>)

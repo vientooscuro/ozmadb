@@ -49,6 +49,38 @@ let private makeSourceAllowedDatabase (role: Role) : SourceAllowedDatabase =
     { Schemas = schemas }
 
 let private makeSourceRole (role: Role) : SourceRole =
+    let privilegedActions =
+        seq {
+            if role.AllowAllActions then
+                yield SPAAll
+
+            for schemaName in role.AllowAllActionsForSchemas do
+                yield SPASchema(OzmaQLName schemaName)
+
+            for a in role.AllowedActions |> Seq.ofObj do
+                yield
+                    SPAAction
+                        { Schema = OzmaQLName a.Action.Schema.Name
+                          Name = OzmaQLName a.Action.Name }
+        }
+        |> Set.ofSeq
+
+    let privilegedTriggers =
+        seq {
+            if role.AllowAllTriggers then
+                yield SPTAll
+
+            for schemaName in role.AllowAllTriggersForSchemas do
+                yield SPTSchema(OzmaQLName schemaName)
+
+            for t in role.AllowedTriggers |> Seq.ofObj do
+                yield
+                    SPTTrigger
+                        { Schema = OzmaQLName t.Trigger.Schema.Name
+                          Name = OzmaQLName t.Trigger.Name }
+        }
+        |> Set.ofSeq
+
     { Parents =
         role.Parents
         |> Seq.map (fun role ->
@@ -66,7 +98,9 @@ let private makeSourceRole (role: Role) : SourceRole =
         |> Seq.map (fun d ->
             { Schema = OzmaQLName d.UserView.Schema.Name
               Name = OzmaQLName d.UserView.Name })
-        |> Set.ofSeq }
+        |> Set.ofSeq
+      PrivilegedActions = privilegedActions
+      PrivilegedTriggers = privilegedTriggers }
 
 let private makeSourcePermissionsSchema (schema: Schema) : SourcePermissionsSchema =
     { Roles =

@@ -260,6 +260,28 @@ let private makeSchema (schema: Schema) =
 let makeAllEntitiesMap (allSchemas: Schema seq) : Map<ResolvedEntityRef, Entity> =
     allSchemas |> Seq.collect makeSchema |> Map.ofSeq
 
+let makeAllActionsMap (allSchemas: Schema seq) : Map<ResolvedEntityRef, Action> =
+    allSchemas
+    |> Seq.collect (fun schema ->
+        schema.Actions
+        |> Seq.ofObj
+        |> Seq.map (fun action ->
+            ({ Schema = OzmaQLName schema.Name
+               Name = OzmaQLName action.Name },
+             action)))
+    |> Map.ofSeq
+
+let makeAllTriggersMap (allSchemas: Schema seq) : Map<ResolvedEntityRef, Trigger> =
+    allSchemas
+    |> Seq.collect (fun schema ->
+        schema.Triggers
+        |> Seq.ofObj
+        |> Seq.map (fun trigger ->
+            ({ Schema = OzmaQLName schema.Name
+               Name = OzmaQLName trigger.Name },
+             trigger)))
+    |> Map.ofSeq
+
 let genericMarkBroken
     (queryable: IQueryable<'a>)
     (checks: Expr<'a -> bool> seq)

@@ -16,6 +16,8 @@ type private PermissionsUpdater(db: SystemContext, allSchemas: Schema seq) as th
     inherit SystemUpdater(db)
 
     let allEntitiesMap = makeAllEntitiesMap allSchemas
+    let allActionsMap = makeAllActionsMap allSchemas
+    let allTriggersMap = makeAllTriggersMap allSchemas
 
     let updateAllowedField (field: SourceAllowedField) (existingField: RoleColumnField) : unit =
         existingField.Insert <- field.Insert
@@ -51,6 +53,68 @@ type private PermissionsUpdater(db: SystemContext, allSchemas: Schema seq) as th
         existingEntity.Update <- Option.toObj entity.Update
         existingEntity.Delete <- Option.toObj entity.Delete
 
+    let updateAllowedActions (role: SourceRole) (existingRole: Role) : unit =
+        let oldActionsMap =
+            existingRole.AllowedActions
+            |> Seq.ofObj
+            |> Seq.map (fun ra ->
+                ({ Schema = OzmaQLName ra.Action.Schema.Name
+                   Name = OzmaQLName ra.Action.Name },
+                 ra))
+            |> Map.ofSeq
+
+        let newActionsMap =
+            role.PrivilegedActions
+            |> Set.toSeq
+            |> Seq.choose (function
+                | SPAAction ref -> Some(ref, ())
+                | _ -> None)
+            |> Map.ofSeq
+
+        let updateFunc _ref () (_existing: RoleAllowedAction) = ()
+
+        let createFunc (actionRef: ResolvedEntityRef) =
+            let action =
+                match Map.tryFind actionRef allActionsMap with
+                | Some id -> id
+                | None -> raisef SystemUpdaterException "Unknown action %O" actionRef
+
+            RoleAllowedAction(Action = action, Role = existingRole)
+
+        ignore
+        <| this.UpdateDifference updateFunc createFunc newActionsMap oldActionsMap
+
+    let updateAllowedTriggers (role: SourceRole) (existingRole: Role) : unit =
+        let oldTriggersMap =
+            existingRole.AllowedTriggers
+            |> Seq.ofObj
+            |> Seq.map (fun rt ->
+                ({ Schema = OzmaQLName rt.Trigger.Schema.Name
+                   Name = OzmaQLName rt.Trigger.Name },
+                 rt))
+            |> Map.ofSeq
+
+        let newTriggersMap =
+            role.PrivilegedTriggers
+            |> Set.toSeq
+            |> Seq.choose (function
+                | SPTTrigger ref -> Some(ref, ())
+                | _ -> None)
+            |> Map.ofSeq
+
+        let updateFunc _ref () (_existing: RoleAllowedTrigger) = ()
+
+        let createFunc (triggerRef: ResolvedEntityRef) =
+            let trigger =
+                match Map.tryFind triggerRef allTriggersMap with
+                | Some id -> id
+                | None -> raisef SystemUpdaterException "Unknown trigger %O" triggerRef
+
+            RoleAllowedTrigger(Trigger = trigger, Role = existingRole)
+
+        ignore
+        <| this.UpdateDifference updateFunc createFunc newTriggersMap oldTriggersMap
+
     let updateAllowedDatabase (role: SourceRole) (existingRole: Role) : unit =
         let oldEntitiesMap =
             existingRole.Entities
@@ -74,6 +138,25 @@ type private PermissionsUpdater(db: SystemContext, allSchemas: Schema seq) as th
             |> Map.ofSeq
 
         existingRole.AllowBroken <- role.AllowBroken
+        existingRole.AllowAllActions <- Set.contains SPAAll role.PrivilegedActions
+
+        existingRole.AllowAllActionsForSchemas <-
+            role.PrivilegedActions
+            |> Set.toSeq
+            |> Seq.choose (function
+                | SPASchema(OzmaQLName s) -> Some s
+                | _ -> None)
+            |> Array.ofSeq
+
+        existingRole.AllowAllTriggers <- Set.contains SPTAll role.PrivilegedTriggers
+
+        existingRole.AllowAllTriggersForSchemas <-
+            role.PrivilegedTriggers
+            |> Set.toSeq
+            |> Seq.choose (function
+                | SPTSchema(OzmaQLName s) -> Some s
+                | _ -> None)
+            |> Array.ofSeq
 
         let updateFunc = updateAllowedEntity
 
@@ -86,6 +169,8 @@ type private PermissionsUpdater(db: SystemContext, allSchemas: Schema seq) as th
             RoleEntity(Entity = entity, Role = existingRole)
 
         ignore <| this.UpdateDifference updateFunc createFunc entitiesMap oldEntitiesMap
+        updateAllowedActions role existingRole
+        updateAllowedTriggers role existingRole
 
     let updatePermissionsSchema (schema: SourcePermissionsSchema) (existingSchema: Schema) : unit =
         let oldRolesMap =

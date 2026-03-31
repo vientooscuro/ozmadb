@@ -21,9 +21,22 @@ open OzmaDB.Triggers.Source
 open OzmaDB.Triggers.Merge
 open OzmaDB.Triggers.Run
 open OzmaDB.Triggers.Time
+open OzmaDB.Permissions.Source
+open OzmaDB.Permissions.Types
 open OzmaDB.Operations.Entity
 open OzmaDB.Operations.Command
 open OzmaDB.API.Types
+
+let private isTriggerPrivileged (triggerRef: TriggerRef) (role: ResolvedRole) : bool =
+    let nameRef =
+        { Schema = triggerRef.Schema
+          Name = triggerRef.Name }
+
+    role.PrivilegedTriggers
+    |> Set.exists (function
+        | SPTAll -> true
+        | SPTSchema schema -> schema = triggerRef.Schema
+        | SPTTrigger ref -> ref = nameRef)
 
 let private insertEntryComments (ref: ResolvedEntityRef) (role: RoleType) (_arguments: LocalArgumentsMap) =
     let refStr = sprintf "insert into %O" ref
@@ -161,6 +174,27 @@ type EntitiesAPI(api: IOzmaDBAPI) =
         | None -> ()
         | Some maxSize -> ctx.ScheduleBeforeCommit "check_max_size" checkSizeQuota
 
+    let shouldElevateTrigger (ref: TriggerRef) =
+        match rctx.User.Effective.Type with
+        | RTRoot -> false
+        | RTRole roleInfo ->
+            match roleInfo.Role with
+            | Some role -> isTriggerPrivileged ref role
+            | None -> false
+
+    let withTriggerElevation (ref: TriggerRef) (f: unit -> Task<'a>) : Task<'a> =
+        task {
+            if shouldElevateTrigger ref then
+                let! result = rctx.PretendRole { AsRole = PRRoot } f
+
+                return
+                    match result with
+                    | Ok r -> r
+                    | Error _ -> failwith "Unexpected PretendRole error when elevating trigger"
+            else
+                return! f ()
+        }
+
     let runArgsTrigger
         (run: TriggerScript -> Task<ArgsTriggerResult>)
         (entityRef: ResolvedEntityRef)
@@ -175,32 +209,40 @@ type EntitiesAPI(api: IOzmaDBAPI) =
 
         let preparedTrigger = ctx.FindTrigger ref |> Option.get
 
-        rctx.RunWithSource(ESTrigger ref)
+        withTriggerElevation ref
         <| fun () ->
-            task {
-                try
-                    match! run preparedTrigger.Script with
-                    | ATCancelled -> return Error(BECancelled())
-                    | ATUntouched -> return Ok args
-                    | ATTouched rawArgs ->
-                        let newArgs = convertEntityArguments entity rawArgs
-                        return Ok newArgs
-                with
-                | :? ArgumentCheckException as e when e.IsUserException ->
-                    logger.LogError(e, "Trigger {name} returned invalid arguments", ref)
+            rctx.RunWithSource(ESTrigger ref)
+            <| fun () ->
+                task {
+                    try
+                        match! run preparedTrigger.Script with
+                        | ATCancelled -> return Error(BECancelled())
+                        | ATUntouched -> return Ok args
+                        | ATTouched rawArgs ->
+                            let newArgs = convertEntityArguments entity rawArgs
+                            return Ok newArgs
+                    with
+                    | :? ArgumentCheckException as e when e.IsUserException ->
+                        logger.LogError(e, "Trigger {name} returned invalid arguments", ref)
 
-                    return
-                        Error
-                        <| BEError(
-                            EETrigger(trigger.Schema, trigger.Name, EEOperation(EOEExecution(UVEArgument e.Details)))
-                        )
-                | :? TriggerRunException as e when e.IsUserException ->
-                    logger.LogError(e, "Exception in trigger {name}", ref)
+                        return
+                            Error
+                            <| BEError(
+                                EETrigger(
+                                    trigger.Schema,
+                                    trigger.Name,
+                                    EEOperation(EOEExecution(UVEArgument e.Details))
+                                )
+                            )
+                    | :? TriggerRunException as e when e.IsUserException ->
+                        logger.LogError(e, "Exception in trigger {name}", ref)
 
-                    return
-                        Error
-                        <| BEError(EETrigger(trigger.Schema, trigger.Name, EEException(fullUserMessage e, e.UserData)))
-            }
+                        return
+                            Error
+                            <| BEError(
+                                EETrigger(trigger.Schema, trigger.Name, EEException(fullUserMessage e, e.UserData))
+                            )
+                }
 
     let runAfterTrigger
         (run: TriggerScript -> Task)
@@ -214,17 +256,19 @@ type EntitiesAPI(api: IOzmaDBAPI) =
 
         let preparedTrigger = ctx.FindTrigger ref |> Option.get
 
-        rctx.RunWithSource(ESTrigger ref)
+        withTriggerElevation ref
         <| fun () ->
-            task {
-                try
-                    do! run preparedTrigger.Script
-                    return Ok()
-                with :? TriggerRunException as ex when ex.IsUserException ->
-                    logger.LogError(ex, "Exception in trigger {name}", ref)
-                    let str = fullUserMessage ex
-                    return Error <| EETrigger(ref.Schema, ref.Name, EEException(str, ex.UserData))
-            }
+            rctx.RunWithSource(ESTrigger ref)
+            <| fun () ->
+                task {
+                    try
+                        do! run preparedTrigger.Script
+                        return Ok()
+                    with :? TriggerRunException as ex when ex.IsUserException ->
+                        logger.LogError(ex, "Exception in trigger {name}", ref)
+                        let str = fullUserMessage ex
+                        return Error <| EETrigger(ref.Schema, ref.Name, EEException(str, ex.UserData))
+                }
 
     let applyInsertTriggerBefore
         (entityRef: ResolvedEntityRef)

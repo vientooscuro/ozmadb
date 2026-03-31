@@ -107,6 +107,14 @@ namespace OzmaDBSchema.System
         [UniqueConstraint("entry", new[] { "role_id", "user_view_id" }, IsAlternateKey = true)]
         public DbSet<RoleDeniedUserView> RoleDeniedUserViews { get; set; } = null!;
 
+        [Entity("id", SaveRestoreKey = "entry", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, TriggersMigration = true)]
+        [UniqueConstraint("entry", new[] { "role_id", "action_id" }, IsAlternateKey = true)]
+        public DbSet<RoleAllowedAction> RoleAllowedActions { get; set; } = null!;
+
+        [Entity("id", SaveRestoreKey = "entry", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, TriggersMigration = true)]
+        [UniqueConstraint("entry", new[] { "role_id", "trigger_id" }, IsAlternateKey = true)]
+        public DbSet<RoleAllowedTrigger> RoleAllowedTriggers { get; set; } = null!;
+
         [Entity("full_name", SaveRestoreKey = "name", InsertedInternally = true, UpdatedInternally = true, DeletedInternally = true, TriggersMigration = true)]
         [ComputedField("full_name", "schema_id=>__main || '.' || field_entity_id=>__main || '.' || field_name")]
         [UniqueConstraint("name", new[] { "schema_id", "field_entity_id", "field_name" }, IsAlternateKey = true)]
@@ -276,7 +284,11 @@ namespace OzmaDBSchema.System
                 .Include(sch => sch.Roles!).ThenInclude(role => role.Parents!).ThenInclude(roleParent => roleParent.Parent!).ThenInclude(role => role.Schema)
                 .Include(sch => sch.Roles!).ThenInclude(role => role.Entities!).ThenInclude(roleEnt => roleEnt.Entity!).ThenInclude(ent => ent.Schema)
                 .Include(sch => sch.Roles!).ThenInclude(role => role.Entities!).ThenInclude(roleEnt => roleEnt.ColumnFields)
-                .Include(sch => sch.Roles!).ThenInclude(role => role.DeniedUserViews!).ThenInclude(d => d.UserView!).ThenInclude(uv => uv.Schema);
+                .Include(sch => sch.Roles!).ThenInclude(role => role.DeniedUserViews!).ThenInclude(d => d.UserView!).ThenInclude(uv => uv.Schema)
+                .Include(sch => sch.Roles!).ThenInclude(role => role.AllowedActions!).ThenInclude(a => a.Action!).ThenInclude(act => act.Schema)
+                .Include(sch => sch.Roles!).ThenInclude(role => role.AllowedTriggers!).ThenInclude(t => t.Trigger!).ThenInclude(trg => trg.Schema)
+                .Include(sch => sch.Actions)
+                .Include(sch => sch.Triggers!).ThenInclude(trg => trg.TriggerEntity!).ThenInclude(ent => ent.Schema);
         }
 
         public IQueryable<Schema> GetAttributesObjects()
@@ -685,10 +697,24 @@ namespace OzmaDBSchema.System
         [ColumnField("bool", Default = "false")]
         public bool AllowAllDelete { get; set; }
 
+        [ColumnField("bool", Default = "false")]
+        public bool AllowAllActions { get; set; }
+
+        [ColumnField("array(string)", Default = "array[]")]
+        public string[] AllowAllActionsForSchemas { get; set; } = new string[0];
+
+        [ColumnField("bool", Default = "false")]
+        public bool AllowAllTriggers { get; set; }
+
+        [ColumnField("array(string)", Default = "array[]")]
+        public string[] AllowAllTriggersForSchemas { get; set; } = new string[0];
+
         public List<RoleParent>? Parents { get; set; }
         public List<RoleParent>? Children { get; set; }
         public List<RoleEntity>? Entities { get; set; }
         public List<RoleDeniedUserView>? DeniedUserViews { get; set; }
+        public List<RoleAllowedAction>? AllowedActions { get; set; }
+        public List<RoleAllowedTrigger>? AllowedTriggers { get; set; }
     }
 
     public class RoleParent
@@ -777,6 +803,32 @@ namespace OzmaDBSchema.System
         [ColumnField("reference(public.user_views) on delete cascade")]
         public int UserViewId { get; set; }
         public UserView? UserView { get; set; }
+    }
+
+    public class RoleAllowedAction
+    {
+        public int Id { get; set; }
+
+        [ColumnField("reference(public.roles) on delete cascade")]
+        public int RoleId { get; set; }
+        public Role? Role { get; set; }
+
+        [ColumnField("reference(public.actions) on delete cascade")]
+        public int ActionId { get; set; }
+        public Action? Action { get; set; }
+    }
+
+    public class RoleAllowedTrigger
+    {
+        public int Id { get; set; }
+
+        [ColumnField("reference(public.roles) on delete cascade")]
+        public int RoleId { get; set; }
+        public Role? Role { get; set; }
+
+        [ColumnField("reference(public.triggers) on delete cascade")]
+        public int TriggerId { get; set; }
+        public Trigger? Trigger { get; set; }
     }
 
     public class FieldAttributes
