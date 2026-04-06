@@ -2373,7 +2373,7 @@ type private QueryCompiler
         let ret =
             { Fields = fields
               Expr = SQL.DESelect expr
-              Materialized = Some <| Option.defaultValue false cte.Materialized }
+              Materialized = cte.Materialized }
             : SQL.CommonTableExpr
 
         (info, ret)
