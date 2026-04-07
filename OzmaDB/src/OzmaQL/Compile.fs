@@ -689,16 +689,14 @@ type private ExprContext =
       EntityAttributes: EntityAttributesMap
       Flags: ExprCompilationFlags
       JoinNamespace: JoinNamespace
-      RefContext: ReferenceContext
-      AsRootEntities: Set<ResolvedEntityRef> }
+      RefContext: ReferenceContext }
 
 let private rootExprContext =
     { CTEs = Map.empty
       EntityAttributes = Map.empty
       Flags = emptyExprCompilationFlags
       JoinNamespace = rootJoinNamespace
-      RefContext = RCExpr
-      AsRootEntities = Set.empty }
+      RefContext = RCExpr }
 
 let private selectSignature (half: HalfCompiledSingleSelect) : SelectSignature =
     { MetaColumns = half.MetaColumns |> Map.map (fun name col -> col.Info)
@@ -1095,6 +1093,7 @@ type private QueryCompiler
     // Only compiler can robustly detect used schemas and arguments, accounting for meta columns.
     let mutable arguments = initialArguments
     let mutable usedDatabase = emptyUsedDatabase
+    let mutable asRootEntities: Set<ResolvedEntityRef> = Set.empty
     let mutable referenceArgumentCache: Map<string, SQL.SelectExpr> = Map.empty
     let requestLinesNumberPlaceholderId = arguments.NextPlaceholderId
 
@@ -1441,18 +1440,12 @@ type private QueryCompiler
             | None -> raisef QueryCompileException "Failed to find field: %O" boundRef
             | Some f -> f
 
-        let isAsRoot =
-            args.AsRoot || Set.contains boundRef.Entity args.Context.AsRootEntities
-
         match fieldInfo.Field with
         | RId ->
-            if not isAsRoot then
-                usedDatabase <- addUsedFieldRef boundRef usedFieldSelect usedDatabase
-
+            usedDatabase <- addUsedFieldRef boundRef usedFieldSelect usedDatabase
             (args.Paths, realColumn ())
         | RSubEntity ->
-            if not isAsRoot then
-                usedDatabase <- addUsedFieldRef boundRef usedFieldSelect usedDatabase
+            usedDatabase <- addUsedFieldRef boundRef usedFieldSelect usedDatabase
 
             match args.Context.RefContext with
             | RCExpr ->
@@ -1470,9 +1463,8 @@ type private QueryCompiler
                 (args.Paths, expr)
             | RCTypeExpr -> (args.Paths, realColumn ())
         | RColumnField col ->
-            if not isAsRoot then
-                usedDatabase <-
-                    addUsedField boundRef.Entity.Schema boundRef.Entity.Name fieldInfo.Name usedFieldSelect usedDatabase
+            usedDatabase <-
+                addUsedField boundRef.Entity.Schema boundRef.Entity.Name fieldInfo.Name usedFieldSelect usedDatabase
 
             (args.Paths, realColumn ())
         | RComputedField comp when comp.IsMaterialized && not args.Context.Flags.ForceNoMaterialized ->
@@ -2430,18 +2422,9 @@ type private QueryCompiler
                 (fromMap.Tables, fromMap.Joins, Some newFrom)
             | None -> (Map.empty, emptyJoinPaths, None)
 
-        let asRootEntities =
-            fromMap
-            |> Map.values
-            |> Seq.choose (fun fromInfo -> fromInfo.Entity)
-            |> Seq.filter (fun entityInfo -> entityInfo.AsRoot)
-            |> Seq.map (fun entityInfo -> entityInfo.Ref)
-            |> Set.ofSeq
-
         let ctx =
             { ctx with
-                EntityAttributes = fromMap |> Map.map (fun name fromInfo -> fromInfo.Attributes)
-                AsRootEntities = Set.union ctx.AsRootEntities asRootEntities }
+                EntityAttributes = fromMap |> Map.map (fun name fromInfo -> fromInfo.Attributes) }
 
         let mutable paths = fromPaths
 
@@ -3306,7 +3289,9 @@ type private QueryCompiler
                   MainSubEntity = mainSubEntity
                   Attributes = emptyEntityAttributes }
 
-            if not from.AsRoot then
+            if from.AsRoot then
+                asRootEntities <- Set.add entityRef asRootEntities
+            else
                 usedDatabase <- addUsedEntityRef entityRef usedEntitySelect usedDatabase
 
             let res =
@@ -3863,7 +3848,28 @@ type private QueryCompiler
 
     member this.ColumnName name = columnName name
 
-    member this.UsedDatabase = usedDatabase
+    member this.UsedDatabase =
+        if Set.isEmpty asRootEntities then
+            usedDatabase
+        else
+            let filterEntity (schemaName: SchemaName) (entityName: EntityName) =
+                not (
+                    Set.contains
+                        { Schema = schemaName
+                          Name = entityName }
+                        asRootEntities
+                )
+
+            let schemas =
+                usedDatabase.Schemas
+                |> Map.map (fun schemaName usedSchema ->
+                    { Entities =
+                        Map.filter (fun entityName _ -> filterEntity schemaName entityName) usedSchema.Entities }
+                    : UsedSchema)
+                |> Map.filter (fun _ usedSchema -> not (Map.isEmpty usedSchema.Entities))
+
+            { usedDatabase with Schemas = schemas }
+
     member this.Arguments = arguments
     member this.RequestLinesNumberPlaceholderId = requestLinesNumberPlaceholderId
 
