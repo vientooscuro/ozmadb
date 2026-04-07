@@ -3288,7 +3288,8 @@ type private QueryCompiler
                   MainSubEntity = mainSubEntity
                   Attributes = emptyEntityAttributes }
 
-            usedDatabase <- addUsedEntityRef entityRef usedEntitySelect usedDatabase
+            if not from.AsRoot then
+                usedDatabase <- addUsedEntityRef entityRef usedEntitySelect usedDatabase
 
             let res =
                 { Tables = Map.singleton newAlias.Name fromInfo
