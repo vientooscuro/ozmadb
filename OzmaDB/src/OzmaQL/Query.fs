@@ -226,9 +226,193 @@ let private stripTopLevelLimitOffset (select: SQL.SelectExpr) : SQL.SelectExpr =
 
     { select with Tree = tree }
 
+// Collect all table names referenced in a ValueExpr (via VEColumn).
+let private collectReferencedTables (expr: SQL.ValueExpr) : Set<SQL.TableName> =
+    let mutable tables = Set.empty
+
+    let rec traverse =
+        function
+        | SQL.VEColumn col ->
+            match col.Table with
+            | Some t -> tables <- Set.add t.Name tables
+            | None -> ()
+        | SQL.VENot e -> traverse e
+        | SQL.VEOr(a, b)
+        | SQL.VEAnd(a, b)
+        | SQL.VEBinaryOp(a, _, b)
+        | SQL.VEDistinct(a, b)
+        | SQL.VENotDistinct(a, b)
+        | SQL.VEAny(a, _, b)
+        | SQL.VEAll(a, _, b)
+        | SQL.VEArrayIndex(a, b)
+        | SQL.VESimilarTo(a, b)
+        | SQL.VENotSimilarTo(a, b) ->
+            traverse a
+            traverse b
+        | SQL.VEIn(e, vals) ->
+            traverse e
+            Array.iter traverse vals
+        | SQL.VENotIn(e, vals) ->
+            traverse e
+            Array.iter traverse vals
+        | SQL.VEBetween(a, b, c)
+        | SQL.VENotBetween(a, b, c) ->
+            traverse a
+            traverse b
+            traverse c
+        | SQL.VEIsNull e
+        | SQL.VEIsNotNull e
+        | SQL.VECast(e, _) -> traverse e
+        | SQL.VEInQuery(e, _)
+        | SQL.VENotInQuery(e, _) ->
+            // Subqueries have their own scope — only traverse the outer expr.
+            traverse e
+        | SQL.VESpecialFunc(_, args)
+        | SQL.VEFunc(_, args)
+        | SQL.VEArray args -> Array.iter traverse args
+        | SQL.VEAggFunc(_, aggExpr, filter) ->
+            match aggExpr with
+            | SQL.AEAll(exprs, _) -> Array.iter traverse exprs
+            | SQL.AEDistinct(e, _) -> traverse e
+            | SQL.AEStar -> ()
+
+            Option.iter traverse filter
+        | SQL.VEWindowFunc(_, args, _) -> Array.iter traverse args
+        | SQL.VECase(cases, def) ->
+            Array.iter (fun (cond, res) -> traverse cond; traverse res) cases
+            Option.iter traverse def
+        | SQL.VEExists _ // subquery — own scope
+        | SQL.VESubquery _ // subquery — own scope
+        | SQL.VEValue _
+        | SQL.VEPlaceholder _ -> ()
+
+    traverse expr
+    tables
+
+// Get the effective alias name of a FromExpr's rightmost table (the B side of a JOIN).
+let private fromExprAliasName (from: SQL.FromExpr) : SQL.TableName option =
+    match from with
+    | SQL.FTable ft ->
+        match ft.Alias with
+        | Some a -> Some a.Name
+        | None -> Some ft.Table.Name
+    | SQL.FTableExpr fte ->
+        match fte.Alias with
+        | Some a -> Some a.Name
+        | None -> None
+    | SQL.FJoin _ ->
+        // Joins don't have a single top-level alias.
+        None
+
+// Recursively strip LEFT JOINs whose right side is not referenced in the given set of used tables.
+// Returns None if the entire FROM clause was stripped (shouldn't happen in practice).
+let rec private stripUnusedLeftJoins (usedTables: Set<SQL.TableName>) (from: SQL.FromExpr) : SQL.FromExpr option =
+    match from with
+    | SQL.FJoin join when join.Type = SQL.Left ->
+        // Check if the right side's alias is used.
+        let rightAlias = fromExprAliasName join.B
+
+        let rightUsed =
+            match rightAlias with
+            | Some alias -> Set.contains alias usedTables
+            | None -> true // Can't determine — keep it.
+
+        if rightUsed then
+            // Right side is used; recurse into left side too.
+            match stripUnusedLeftJoins usedTables join.A with
+            | Some newA -> Some(SQL.FJoin { join with A = newA })
+            | None -> Some from // Left got stripped away entirely — keep original
+        else
+            // Right side not used — drop this JOIN entirely, keep only the left side.
+            stripUnusedLeftJoins usedTables join.A
+    | SQL.FJoin join ->
+        // Non-LEFT join — must keep, but recurse into left side.
+        match stripUnusedLeftJoins usedTables join.A with
+        | Some newA -> Some(SQL.FJoin { join with A = newA })
+        | None -> Some from
+    | _ -> Some from
+
+// Build a minimal count query from a SingleSelectExpr.
+// - Drops ORDER BY (never affects row count).
+// - Drops all SELECT columns (replaced by count(*)).
+// - Strips LEFT JOINs not referenced in WHERE or GROUP BY.
+// - If query has GROUP BY or DISTINCT, wraps in outer SELECT count(*).
+let private buildCountSingleSelect (query: SQL.SingleSelectExpr) : SQL.SelectExpr =
+    let countAll =
+        SQL.SCExpr(None, SQL.VEAggFunc(SQL.SQLName "count", SQL.AEStar, None))
+
+    let noOrderLimit =
+        { query.OrderLimit with
+            OrderBy = [||]
+            Limit = None
+            Offset = None }
+
+    // Collect tables used in WHERE and GROUP BY.
+    let usedTables =
+        let fromWhere =
+            query.Where |> Option.map collectReferencedTables |> Option.defaultValue Set.empty
+
+        let fromGroupBy =
+            query.GroupBy |> Array.map collectReferencedTables |> Array.fold Set.union Set.empty
+
+        Set.union fromWhere fromGroupBy
+
+    let strippedFrom =
+        query.From |> Option.bind (stripUnusedLeftJoins usedTables)
+
+    if not (Array.isEmpty query.GroupBy) || query.Distinct then
+        // GROUP BY or DISTINCT: the number of output rows = number of groups/distinct combos.
+        // We can't simply replace columns — wrap in outer count.
+        let inner =
+            { query with
+                Columns = [| SQL.SCExpr(None, SQL.VEValue SQL.VNull) |] // SELECT NULL — minimal
+                OrderLimit = noOrderLimit
+                From = strippedFrom }
+
+        let innerAlias : SQL.TableAlias = { Name = SQL.SQLName "__count_inner"; Columns = None }
+
+        let outer =
+            { SQL.emptySingleSelectExpr with
+                Columns = [| countAll |]
+                From = Some(SQL.FTableExpr(SQL.subSelectExpr innerAlias (SQL.selectExpr (SQL.SSelect inner)))) }
+
+        SQL.selectExpr (SQL.SSelect outer)
+    else
+        // Simple case: replace columns with count(*), strip ORDER BY and unused LEFT JOINs.
+        let simplified =
+            { query with
+                Columns = [| countAll |]
+                OrderLimit = noOrderLimit
+                From = strippedFrom }
+
+        SQL.selectExpr (SQL.SSelect simplified)
+
+// Build a count query from a full SelectExpr, stripping everything unnecessary.
+let private buildCountQuery (select: SQL.SelectExpr) : SQL.SelectExpr =
+    // Strip top-level CTEs from count — they may be needed if referenced in WHERE,
+    // but since we strip LEFT JOINs (which are the main CTE consumers), keep CTEs for safety.
+    match select.Tree with
+    | SQL.SSelect query ->
+        { (buildCountSingleSelect query) with CTEs = select.CTEs }
+    | SQL.SSetOp _
+    | SQL.SValues _ ->
+        // For set operations and VALUES, fall back to wrapping.
+        let noLimit = stripTopLevelLimitOffset select
+
+        let outerAlias : SQL.TableAlias =
+            { Name = SQL.SQLName "__request_lines_number"
+              Columns = None }
+
+        SQL.selectExpr (
+            SQL.SSelect
+                { SQL.emptySingleSelectExpr with
+                    Columns = [| SQL.SCExpr(None, SQL.VEAggFunc(SQL.SQLName "count", SQL.AEStar, None)) |]
+                    From = Some(SQL.FTableExpr(SQL.subSelectExpr outerAlias noLimit)) }
+        )
+
 let private getTotalRowsCountQuery (rowsQuery: SQL.SelectExpr) : string =
-    let fullQuery = stripTopLevelLimitOffset rowsQuery
-    sprintf "SELECT count(*) FROM (%s) AS __request_lines_number" (fullQuery.ToSQLString())
+    let countQuery = buildCountQuery rowsQuery
+    countQuery.ToSQLString()
 
 let private requestLinesRowAttributeName = OzmaQLName "__request_lines_number"
 let private requestLinesRowColumnName = SQL.SQLName "__request_lines_number"
