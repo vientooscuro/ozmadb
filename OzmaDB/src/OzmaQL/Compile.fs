@@ -689,14 +689,16 @@ type private ExprContext =
       EntityAttributes: EntityAttributesMap
       Flags: ExprCompilationFlags
       JoinNamespace: JoinNamespace
-      RefContext: ReferenceContext }
+      RefContext: ReferenceContext
+      AsRootEntities: Set<ResolvedEntityRef> }
 
 let private rootExprContext =
     { CTEs = Map.empty
       EntityAttributes = Map.empty
       Flags = emptyExprCompilationFlags
       JoinNamespace = rootJoinNamespace
-      RefContext = RCExpr }
+      RefContext = RCExpr
+      AsRootEntities = Set.empty }
 
 let private selectSignature (half: HalfCompiledSingleSelect) : SelectSignature =
     { MetaColumns = half.MetaColumns |> Map.map (fun name col -> col.Info)
@@ -1439,12 +1441,18 @@ type private QueryCompiler
             | None -> raisef QueryCompileException "Failed to find field: %O" boundRef
             | Some f -> f
 
+        let isAsRoot =
+            args.AsRoot || Set.contains boundRef.Entity args.Context.AsRootEntities
+
         match fieldInfo.Field with
         | RId ->
-            usedDatabase <- addUsedFieldRef boundRef usedFieldSelect usedDatabase
+            if not isAsRoot then
+                usedDatabase <- addUsedFieldRef boundRef usedFieldSelect usedDatabase
+
             (args.Paths, realColumn ())
         | RSubEntity ->
-            usedDatabase <- addUsedFieldRef boundRef usedFieldSelect usedDatabase
+            if not isAsRoot then
+                usedDatabase <- addUsedFieldRef boundRef usedFieldSelect usedDatabase
 
             match args.Context.RefContext with
             | RCExpr ->
@@ -1462,8 +1470,9 @@ type private QueryCompiler
                 (args.Paths, expr)
             | RCTypeExpr -> (args.Paths, realColumn ())
         | RColumnField col ->
-            usedDatabase <-
-                addUsedField boundRef.Entity.Schema boundRef.Entity.Name fieldInfo.Name usedFieldSelect usedDatabase
+            if not isAsRoot then
+                usedDatabase <-
+                    addUsedField boundRef.Entity.Schema boundRef.Entity.Name fieldInfo.Name usedFieldSelect usedDatabase
 
             (args.Paths, realColumn ())
         | RComputedField comp when comp.IsMaterialized && not args.Context.Flags.ForceNoMaterialized ->
@@ -2421,9 +2430,18 @@ type private QueryCompiler
                 (fromMap.Tables, fromMap.Joins, Some newFrom)
             | None -> (Map.empty, emptyJoinPaths, None)
 
+        let asRootEntities =
+            fromMap
+            |> Map.values
+            |> Seq.choose (fun fromInfo -> fromInfo.Entity)
+            |> Seq.filter (fun entityInfo -> entityInfo.AsRoot)
+            |> Seq.map (fun entityInfo -> entityInfo.Ref)
+            |> Set.ofSeq
+
         let ctx =
             { ctx with
-                EntityAttributes = fromMap |> Map.map (fun name fromInfo -> fromInfo.Attributes) }
+                EntityAttributes = fromMap |> Map.map (fun name fromInfo -> fromInfo.Attributes)
+                AsRootEntities = Set.union ctx.AsRootEntities asRootEntities }
 
         let mutable paths = fromPaths
 
