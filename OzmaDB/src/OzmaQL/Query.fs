@@ -309,6 +309,21 @@ let private fromExprAliasName (from: SQL.FromExpr) : SQL.TableName option =
         // Joins don't have a single top-level alias.
         None
 
+// Collect all tables referenced in JOIN ON conditions throughout a FROM tree.
+// This is needed so we don't strip a LEFT JOIN whose alias is used in another JOIN's condition.
+let rec private collectJoinConditionTables (from: SQL.FromExpr) : Set<SQL.TableName> =
+    match from with
+    | SQL.FJoin join ->
+        let fromCondition =
+            join.Condition
+            |> Option.map collectReferencedTables
+            |> Option.defaultValue Set.empty
+
+        let fromA = collectJoinConditionTables join.A
+        let fromB = collectJoinConditionTables join.B
+        Set.union fromCondition (Set.union fromA fromB)
+    | _ -> Set.empty
+
 // Recursively strip LEFT JOINs whose right side is not referenced in the given set of used tables.
 // Returns None if the entire FROM clause was stripped (shouldn't happen in practice).
 let rec private stripUnusedLeftJoins (usedTables: Set<SQL.TableName>) (from: SQL.FromExpr) : SQL.FromExpr option =
@@ -353,6 +368,9 @@ let private buildCountSingleSelect (query: SQL.SingleSelectExpr) : SQL.SelectExp
             Offset = None }
 
     // Collect tables used in WHERE and GROUP BY.
+    // We do NOT include SELECT columns because those get replaced by count(*).
+    // We also include tables referenced in JOIN ON conditions so we don't accidentally
+    // strip a LEFT JOIN whose alias is used by another JOIN's condition.
     let usedTables =
         let fromWhere =
             query.Where
@@ -364,7 +382,12 @@ let private buildCountSingleSelect (query: SQL.SingleSelectExpr) : SQL.SelectExp
             |> Array.map collectReferencedTables
             |> Array.fold Set.union Set.empty
 
-        Set.union fromWhere fromGroupBy
+        let fromJoinConditions =
+            query.From
+            |> Option.map collectJoinConditionTables
+            |> Option.defaultValue Set.empty
+
+        Set.union fromWhere (Set.union fromGroupBy fromJoinConditions)
 
     let strippedFrom = query.From |> Option.bind (stripUnusedLeftJoins usedTables)
 
