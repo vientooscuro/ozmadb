@@ -279,7 +279,12 @@ let private collectReferencedTables (expr: SQL.ValueExpr) : Set<SQL.TableName> =
             Option.iter traverse filter
         | SQL.VEWindowFunc(_, args, _) -> Array.iter traverse args
         | SQL.VECase(cases, def) ->
-            Array.iter (fun (cond, res) -> traverse cond; traverse res) cases
+            Array.iter
+                (fun (cond, res) ->
+                    traverse cond
+                    traverse res)
+                cases
+
             Option.iter traverse def
         | SQL.VEExists _ // subquery — own scope
         | SQL.VESubquery _ // subquery — own scope
@@ -350,15 +355,18 @@ let private buildCountSingleSelect (query: SQL.SingleSelectExpr) : SQL.SelectExp
     // Collect tables used in WHERE and GROUP BY.
     let usedTables =
         let fromWhere =
-            query.Where |> Option.map collectReferencedTables |> Option.defaultValue Set.empty
+            query.Where
+            |> Option.map collectReferencedTables
+            |> Option.defaultValue Set.empty
 
         let fromGroupBy =
-            query.GroupBy |> Array.map collectReferencedTables |> Array.fold Set.union Set.empty
+            query.GroupBy
+            |> Array.map collectReferencedTables
+            |> Array.fold Set.union Set.empty
 
         Set.union fromWhere fromGroupBy
 
-    let strippedFrom =
-        query.From |> Option.bind (stripUnusedLeftJoins usedTables)
+    let strippedFrom = query.From |> Option.bind (stripUnusedLeftJoins usedTables)
 
     if not (Array.isEmpty query.GroupBy) || query.Distinct then
         // GROUP BY or DISTINCT: the number of output rows = number of groups/distinct combos.
@@ -369,7 +377,9 @@ let private buildCountSingleSelect (query: SQL.SingleSelectExpr) : SQL.SelectExp
                 OrderLimit = noOrderLimit
                 From = strippedFrom }
 
-        let innerAlias : SQL.TableAlias = { Name = SQL.SQLName "__count_inner"; Columns = None }
+        let innerAlias: SQL.TableAlias =
+            { Name = SQL.SQLName "__count_inner"
+              Columns = None }
 
         let outer =
             { SQL.emptySingleSelectExpr with
@@ -393,13 +403,14 @@ let private buildCountQuery (select: SQL.SelectExpr) : SQL.SelectExpr =
     // but since we strip LEFT JOINs (which are the main CTE consumers), keep CTEs for safety.
     match select.Tree with
     | SQL.SSelect query ->
-        { (buildCountSingleSelect query) with CTEs = select.CTEs }
+        { (buildCountSingleSelect query) with
+            CTEs = select.CTEs }
     | SQL.SSetOp _
     | SQL.SValues _ ->
         // For set operations and VALUES, fall back to wrapping.
         let noLimit = stripTopLevelLimitOffset select
 
-        let outerAlias : SQL.TableAlias =
+        let outerAlias: SQL.TableAlias =
             { Name = SQL.SQLName "__request_lines_number"
               Columns = None }
 
