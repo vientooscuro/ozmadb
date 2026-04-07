@@ -18,6 +18,7 @@ open OzmaDB.OzmaQL.Query
 open OzmaDB.Layout.Types
 open OzmaDB.Layout.Info
 open OzmaDB.Permissions.Types
+open OzmaDB.Permissions.Resolve
 open OzmaDB.Permissions.Apply
 open OzmaDB.Permissions.View
 open OzmaDB.Permissions.Entity
@@ -26,6 +27,7 @@ open OzmaDB.SQL.Query
 
 module SQL = OzmaDB.SQL.Utils
 module SQL = OzmaDB.SQL.AST
+module SQL = OzmaDB.SQL.Rename
 
 type RowId = int
 
@@ -552,6 +554,12 @@ let private runCheckExpr
 
         let select = selectExpr (SSelect singleSelect)
         let (exprInfo, compiledSelect) = compileSelectExpr layout arguments select
+
+        // The check expression was compiled with ForceSQLTable = "__restricted", but the FROM clause
+        // uses the standard entity alias (e.g. "schema__entity"). Rename to match.
+        let entityTableName = renameResolvedEntityRef entityRef
+        let renamesMap = Map.singleton restrictedTableRef.Name entityTableName
+        let compiledSelect = SQL.naiveRenameTablesSelectExpr renamesMap compiledSelect
 
         let localArgumentValues = Map.singleton idsPlaceholder <| FIntArray ids
         let argumentValues = Map.union (Map.mapKeys PGlobal globalArgs) localArgumentValues

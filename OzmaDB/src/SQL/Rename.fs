@@ -157,6 +157,7 @@ type private NaiveRenamer(renamesMap: RenamesMap) =
         | DEDelete expr -> DEDelete <| renameDeleteExpr expr
 
     member this.RenameValueExpr expr = renameValueExpr expr
+    member this.RenameSelectExpr expr = renameSelectExpr expr
 
 // This is called "naive" because it doesn't take aliasing into account. So if a table
 // has been bound under the renamed name in an inner SELECT, it will still be renamed.
@@ -164,3 +165,7 @@ type private NaiveRenamer(renamesMap: RenamesMap) =
 let naiveRenameTablesExpr (renamesMap: RenamesMap) (expr: ValueExpr) =
     let renamer = NaiveRenamer(renamesMap)
     renamer.RenameValueExpr expr
+
+let naiveRenameTablesSelectExpr (renamesMap: RenamesMap) (expr: SelectExpr) =
+    let renamer = NaiveRenamer(renamesMap)
+    renamer.RenameSelectExpr expr
