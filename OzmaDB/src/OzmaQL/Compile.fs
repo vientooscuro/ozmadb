@@ -3221,7 +3221,7 @@ type private QueryCompiler
                 { RealEntity = entityRef
                   FromPath = false
                   IsInner = isInner
-                  AsRoot = false }
+                  AsRoot = from.AsRoot }
                 : RealEntityAnnotation
 
             let tableRef = compileResolvedEntityRef entity.Root
