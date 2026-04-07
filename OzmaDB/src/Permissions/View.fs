@@ -27,12 +27,13 @@ type private PermissionsApplier
         restr
 
     let rec buildSelectUpdateRestriction entityRef =
-        let filter = Map.find entityRef allowedDatabase
-
-        filter.SelectUpdate
-        |> Option.get
-        |> filterToOption
-        |> Option.map (compileSingleRestriction entityRef)
+        match Map.tryFind entityRef allowedDatabase with
+        | None -> None
+        | Some filter ->
+            filter.SelectUpdate
+            |> Option.get
+            |> filterToOption
+            |> Option.map (compileSingleRestriction entityRef)
 
     and getSelectUpdateRestriction = memoizeN buildSelectUpdateRestriction
 
@@ -47,12 +48,13 @@ type private PermissionsApplier
         |> Option.map (restrictionToDMLExpr entityRef newTableName)
 
     let rec buildDeleteRestriction entityRef =
-        let filter = Map.find entityRef allowedDatabase
-
-        filter.Delete
-        |> Option.get
-        |> filterToOption
-        |> Option.map (compileSingleRestriction entityRef)
+        match Map.tryFind entityRef allowedDatabase with
+        | None -> None
+        | Some filter ->
+            filter.Delete
+            |> Option.get
+            |> filterToOption
+            |> Option.map (compileSingleRestriction entityRef)
 
     and getDeleteRestriction = memoizeN buildDeleteRestriction
 
