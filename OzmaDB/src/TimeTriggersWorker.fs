@@ -133,7 +133,11 @@ type TimeTriggersWorker
 
                         match runResult with
                         | Ok() ->
-                            do! completeClaimedTimeTrigger ctx.Transaction.Connection.Query claimedTask.Id cancellationToken
+                            do!
+                                completeClaimedTimeTrigger
+                                    ctx.Transaction.Connection.Query
+                                    claimedTask.Id
+                                    cancellationToken
                         | Error err ->
                             logger.LogError(
                                 "Time trigger execution failed for {trigger} (task {id}): {error}",
