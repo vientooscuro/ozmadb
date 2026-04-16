@@ -96,14 +96,19 @@ type TimeTriggersWorker
                         logger.LogError("Failed to commit empty scheduler transaction: {error}", err.LogMessage)
                         shouldContinue <- false
                 | Some claimedTask, _ ->
-                    let! runResult =
-                        task {
-                            try
-                                match ctx.FindTrigger claimedTask.Trigger with
-                                | None ->
-                                    let message = sprintf "Trigger %O not found" claimedTask.Trigger
-                                    return Error message
-                                | Some preparedTrigger ->
+                    match ctx.FindTrigger claimedTask.Trigger with
+                    | None ->
+                        logger.LogWarning(
+                            "Time trigger {trigger} (task {id}) no longer exists, removing stale task",
+                            claimedTask.Trigger,
+                            claimedTask.Id
+                        )
+
+                        do! completeClaimedTimeTrigger ctx.Transaction.Connection.Query claimedTask.Id cancellationToken
+                    | Some preparedTrigger ->
+                        let! runResult =
+                            task {
+                                try
                                     do!
                                         rctx.RunWithSource(ESTrigger claimedTask.Trigger)
                                         <| fun () ->
@@ -122,28 +127,28 @@ type TimeTriggersWorker
                                             }
 
                                     return Ok()
-                            with e ->
-                                return Error(fullUserMessage e)
-                        }
+                                with e ->
+                                    return Error(fullUserMessage e)
+                            }
 
-                    match runResult with
-                    | Ok() ->
-                        do! completeClaimedTimeTrigger ctx.Transaction.Connection.Query claimedTask.Id cancellationToken
-                    | Error err ->
-                        logger.LogError(
-                            "Time trigger execution failed for {trigger} (task {id}): {error}",
-                            claimedTask.Trigger,
-                            claimedTask.Id,
-                            err
-                        )
-
-                        do!
-                            failClaimedTimeTrigger
-                                ctx.Transaction.Connection.Query
-                                claimedTask.Id
-                                claimedTask.Attempts
+                        match runResult with
+                        | Ok() ->
+                            do! completeClaimedTimeTrigger ctx.Transaction.Connection.Query claimedTask.Id cancellationToken
+                        | Error err ->
+                            logger.LogError(
+                                "Time trigger execution failed for {trigger} (task {id}): {error}",
+                                claimedTask.Trigger,
+                                claimedTask.Id,
                                 err
-                                cancellationToken
+                            )
+
+                            do!
+                                failClaimedTimeTrigger
+                                    ctx.Transaction.Connection.Query
+                                    claimedTask.Id
+                                    claimedTask.Attempts
+                                    err
+                                    cancellationToken
 
                     let! commitResult = ctx.Commit()
 
@@ -153,55 +158,67 @@ type TimeTriggersWorker
                         logger.LogError("Failed to commit time-trigger transaction: {error}", err.LogMessage)
                         shouldContinue <- false
                 | None, Some claimedSchedule ->
-                    let! runResult =
-                        task {
-                            try
-                                match ctx.FindAction claimedSchedule.Action with
-                                | None ->
-                                    let message = sprintf "Action %O not found" claimedSchedule.Action
-                                    return Error message
-                                | Some(Error e) ->
-                                    let message =
-                                        sprintf "Action %O is broken: %s" claimedSchedule.Action (fullUserMessage e)
+                    match ctx.FindAction claimedSchedule.Action with
+                    | None ->
+                        logger.LogWarning(
+                            "Scheduled action {action} (schedule {id}) no longer exists, removing stale schedule",
+                            claimedSchedule.Action,
+                            claimedSchedule.Id
+                        )
 
-                                    return Error message
-                                | Some(Ok action) ->
-                                    do!
-                                        rctx.RunWithSource(ESAction claimedSchedule.Action)
-                                        <| fun () ->
-                                            task {
-                                                let! _ = action.Run(claimedSchedule.Args, cancellationToken)
-                                                return ()
-                                            }
-
-                                    return Ok()
-                            with e ->
-                                return Error(fullUserMessage e)
-                        }
-
-                    match runResult with
-                    | Ok() ->
                         do!
                             completeClaimedActionSchedule
                                 ctx.Transaction.Connection.Query
                                 claimedSchedule.Id
                                 claimedSchedule.DueAt
                                 cancellationToken
-                    | Error err ->
-                        logger.LogError(
-                            "Scheduled action execution failed for {action} (schedule {id}): {error}",
-                            claimedSchedule.Action,
-                            claimedSchedule.Id,
-                            err
-                        )
+                    | Some actionResult ->
+                        let! runResult =
+                            task {
+                                try
+                                    match actionResult with
+                                    | Error e ->
+                                        let message =
+                                            sprintf "Action %O is broken: %s" claimedSchedule.Action (fullUserMessage e)
 
-                        do!
-                            failClaimedActionSchedule
-                                ctx.Transaction.Connection.Query
-                                claimedSchedule.Id
-                                claimedSchedule.Attempts
+                                        return Error message
+                                    | Ok action ->
+                                        do!
+                                            rctx.RunWithSource(ESAction claimedSchedule.Action)
+                                            <| fun () ->
+                                                task {
+                                                    let! _ = action.Run(claimedSchedule.Args, cancellationToken)
+                                                    return ()
+                                                }
+
+                                        return Ok()
+                                with e ->
+                                    return Error(fullUserMessage e)
+                            }
+
+                        match runResult with
+                        | Ok() ->
+                            do!
+                                completeClaimedActionSchedule
+                                    ctx.Transaction.Connection.Query
+                                    claimedSchedule.Id
+                                    claimedSchedule.DueAt
+                                    cancellationToken
+                        | Error err ->
+                            logger.LogError(
+                                "Scheduled action execution failed for {action} (schedule {id}): {error}",
+                                claimedSchedule.Action,
+                                claimedSchedule.Id,
                                 err
-                                cancellationToken
+                            )
+
+                            do!
+                                failClaimedActionSchedule
+                                    ctx.Transaction.Connection.Query
+                                    claimedSchedule.Id
+                                    claimedSchedule.Attempts
+                                    err
+                                    cancellationToken
 
                     let! commitResult = ctx.Commit()
 
