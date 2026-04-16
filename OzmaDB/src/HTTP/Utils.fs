@@ -739,55 +739,71 @@ type HttpJobUtils
                 ictx.IsRoot
             )
 
-            try
-                use! dbCtx = getDbContext ictx
+            let maxConcurrentRetries = 5
+            let baseDelayMs = 100
+            let mutable attempt = 0
+            let mutable result: HttpJobResponse option = None
 
-                let proceed (cancellationToken: CancellationToken) =
-                    dbCtx.CancellationToken <- cancellationToken
+            while Option.isNone result do
+                try
+                    use! dbCtx = getDbContext ictx
 
-                    task {
-                        let! rctx =
-                            RequestContext.Create
-                                { UserName = ictx.UserName
-                                  IsRoot = ictx.IsRoot
-                                  CanRead = ictx.CanRead
-                                  Language = language
-                                  Theme = theme
-                                  Context = dbCtx
-                                  Quota =
-                                    { MaxUsers = ictx.Instance.MaxUsers
-                                      MaxSize = ictx.Instance.MaxSize } }
+                    let proceed (cancellationToken: CancellationToken) =
+                        dbCtx.CancellationToken <- cancellationToken
 
-                        if touchAccessedAt then
-                            let currTime = SystemClock.Instance.GetCurrentInstant()
+                        task {
+                            let! rctx =
+                                RequestContext.Create
+                                    { UserName = ictx.UserName
+                                      IsRoot = ictx.IsRoot
+                                      CanRead = ictx.CanRead
+                                      Language = language
+                                      Theme = theme
+                                      Context = dbCtx
+                                      Quota =
+                                        { MaxUsers = ictx.Instance.MaxUsers
+                                          MaxSize = ictx.Instance.MaxSize } }
 
-                            match ictx.Instance.AccessedAt with
-                            | Some prevTime when currTime - prevTime < randomAccessedAtLaxSpan () ->
-                                ictx.Instance.Dispose()
-                            | _ -> ictx.Instance.UpdateAccessedAtAndDispose currTime
+                            if touchAccessedAt then
+                                let currTime = SystemClock.Instance.GetCurrentInstant()
 
-                        return! f (OzmaDBAPI rctx)
-                    }
+                                match ictx.Instance.AccessedAt with
+                                | Some prevTime when currTime - prevTime < randomAccessedAtLaxSpan () ->
+                                    ictx.Instance.Dispose()
+                                | _ -> ictx.Instance.UpdateAccessedAtAndDispose currTime
 
-                return! limitRequestTime ictx.Instance proceed cancellationToken
-            with
-            | :? ConcurrentUpdateException as e ->
-                logger.LogError(e, "Concurrent update exception")
-                // We may want to retry here in future.
-                return jobError RIConcurrentUpdate
-            | :? DatabaseAccessDeniedException as e ->
-                logger.LogError(e, "Database access denied")
-                return jobError <| RIAccessDenied "Access denied"
-            | :? RequestStackOverflowException as topE ->
-                let allSources = findAllStackOverflowSources topE
+                            return! f (OzmaDBAPI rctx)
+                        }
 
-                let msg =
-                    allSources
-                    |> Seq.map (sprintf "in %O")
-                    |> String.concat "\n"
-                    |> sprintf "Stack depth exceeded:\n%s"
+                    let! res = limitRequestTime ictx.Instance proceed cancellationToken
+                    result <- Some res
+                with
+                | :? ConcurrentUpdateException as e ->
+                    if attempt >= maxConcurrentRetries then
+                        logger.LogError(e, "Concurrent update exception (giving up after {Attempt} retries)", attempt)
+                        result <- Some(jobError RIConcurrentUpdate)
+                    else
+                        let maxJitter = 50
+                        let jitter = Random.Shared.Next(maxJitter)
+                        let delay = min 2000 ((baseDelayMs * (1 <<< attempt)) + jitter)
+                        logger.LogWarning(e, "Concurrent update exception (attempt {Attempt}/{MaxRetries}), retrying in {Delay}ms", attempt + 1, maxConcurrentRetries, delay)
+                        do! Task.Delay(delay, cancellationToken)
+                        attempt <- attempt + 1
+                | :? DatabaseAccessDeniedException as e ->
+                    logger.LogError(e, "Database access denied")
+                    result <- Some(jobError <| RIAccessDenied "Access denied")
+                | :? RequestStackOverflowException as topE ->
+                    let allSources = findAllStackOverflowSources topE
 
-                return jobError <| RIOther msg
+                    let msg =
+                        allSources
+                        |> Seq.map (sprintf "in %O")
+                        |> String.concat "\n"
+                        |> sprintf "Stack depth exceeded:\n%s"
+
+                    result <- Some(jobError <| RIOther msg)
+
+            return Option.get result
         }
 
     let runJobWithApi
