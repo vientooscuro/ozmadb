@@ -84,23 +84,41 @@ let updateTriggers
     (triggers: SourceTriggers)
     (cancellationToken: CancellationToken)
     : Task<UpdateResult> =
-    genericSystemUpdate db cancellationToken
-    <| fun () ->
-        task {
-            let currentSchemas = db.GetTriggersObjects()
+    task {
+        let! result =
+            genericSystemUpdate db cancellationToken
+            <| fun () ->
+                task {
+                    let currentSchemas = db.GetTriggersObjects()
 
-            let! allSchemas = currentSchemas.AsTracking().ToListAsync(cancellationToken)
-            // We don't touch in any way schemas not in layout.
-            let schemasMap =
-                allSchemas
-                |> Seq.map (fun schema -> (OzmaQLName schema.Name, schema))
-                |> Seq.filter (fun (name, schema) -> Map.containsKey name triggers.Schemas)
-                |> Map.ofSeq
+                    let! allSchemas = currentSchemas.AsTracking().ToListAsync(cancellationToken)
+                    // We don't touch in any way schemas not in layout.
+                    let schemasMap =
+                        allSchemas
+                        |> Seq.map (fun schema -> (OzmaQLName schema.Name, schema))
+                        |> Seq.filter (fun (name, schema) -> Map.containsKey name triggers.Schemas)
+                        |> Map.ofSeq
 
-            let updater = TriggersUpdater(db, allSchemas)
-            ignore <| updater.UpdateSchemas triggers.Schemas schemasMap
-            return updater
-        }
+                    let updater = TriggersUpdater(db, allSchemas)
+                    ignore <| updater.UpdateSchemas triggers.Schemas schemasMap
+                    return updater
+                }
+
+        // Remove tasks for triggers that no longer exist.
+        // time_trigger_tasks has no FK to public.triggers, so we clean up manually.
+        let cleanupSql =
+            """
+DELETE FROM public.time_trigger_tasks ttt
+WHERE NOT EXISTS (
+    SELECT 1 FROM public.triggers t
+    JOIN public.schemas s ON t.schema_id = s.id
+    WHERE s.name = ttt.trigger_schema AND t.name = ttt.trigger_name
+)
+"""
+
+        let! _ = db.Database.ExecuteSqlRawAsync(cleanupSql, Seq.empty<obj>, cancellationToken)
+        return result
+    }
 
 let private findBrokenTriggersEntity
     (schemaName: SchemaName)
