@@ -786,11 +786,23 @@ type HttpJobUtils
                     else
                         let maxJitter = 50
                         let jitter = Random.Shared.Next(maxJitter)
+
                         let exponentialDelay =
-                            if attempt >= 30 then maxDelayMs
-                            else baseDelayMs * (1 <<< min attempt 20)
+                            if attempt >= 30 then
+                                maxDelayMs
+                            else
+                                baseDelayMs * (1 <<< min attempt 20)
+
                         let delay = min maxDelayMs (exponentialDelay + jitter)
-                        logger.LogWarning(e, "Concurrent update exception (attempt {Attempt}/{MaxRetries}), retrying in {Delay}ms", attempt + 1, maxConcurrentRetries, delay)
+
+                        logger.LogWarning(
+                            e,
+                            "Concurrent update exception (attempt {Attempt}/{MaxRetries}), retrying in {Delay}ms",
+                            attempt + 1,
+                            maxConcurrentRetries,
+                            delay
+                        )
+
                         do! Task.Delay(delay, cancellationToken)
                         attempt <- attempt + 1
                 | :? DatabaseAccessDeniedException as e ->
