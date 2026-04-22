@@ -1,6 +1,7 @@
 module OzmaDB.TimeTriggersWorker
 
 open System
+open System.Data
 open System.Threading
 open System.Threading.Tasks
 open Microsoft.Extensions.Hosting
@@ -10,6 +11,8 @@ open Npgsql
 open OzmaDB.OzmaQL.AST
 open OzmaDB.OzmaUtils
 open OzmaDB.Exception
+open OzmaDB.Connection
+open OzmaDB.SQL.Query
 open OzmaDB.API.Types
 open OzmaDB.API.Request
 open OzmaDB.API.API
@@ -55,47 +58,109 @@ type TimeTriggersWorker
             return discovered
         }
 
-    let processOneConnection (connectionString: string) (cancellationToken: CancellationToken) : Task<int> =
+    let maxSerializableRetries = 5
+    let baseRetryDelayMs = 100
+    let maxRetryDelayMs = 2000
+    let retryJitterMs = 50
+
+    // Phase A: claim a due time trigger or action schedule in a short ReadCommitted transaction.
+    // SSI is not needed here — FOR UPDATE SKIP LOCKED already guarantees exclusive claim semantics,
+    // and running the claim at ReadCommitted removes predicate reads that previously caused SSI
+    // pivot cancellations when the long-running scheduler tx overlapped with app transactions.
+    let claimNextDue
+        (connectionString: string)
+        (cancellationToken: CancellationToken)
+        : Task<ClaimedTimeTriggerTask option * ClaimedActionSchedule option> =
+        openAndCheckTransaction loggerFactory connectionString IsolationLevel.ReadCommitted cancellationToken
+        <| fun trans ->
+            task {
+                try
+                    let! maybeClaimedTimeTask = tryClaimDueTimeTrigger trans.Connection.Query cancellationToken
+
+                    let! maybeClaimedActionSchedule =
+                        match maybeClaimedTimeTask with
+                        | Some _ -> Task.result None
+                        | None -> tryClaimDueActionSchedule trans.Connection.Query cancellationToken
+
+                    let! _ = trans.Commit(cancellationToken)
+                    return (maybeClaimedTimeTask, maybeClaimedActionSchedule)
+                finally
+                    (trans.Connection :> IDisposable).Dispose()
+            }
+
+    // Phase C: persist a terminal failure of a claimed task in a short ReadCommitted transaction,
+    // independent from the serializable tx that may have rolled back.
+    let persistTimeTriggerFailure
+        (connectionString: string)
+        (taskId: int)
+        (attempts: int)
+        (err: string)
+        (cancellationToken: CancellationToken)
+        : Task<unit> =
+        openAndCheckTransaction loggerFactory connectionString IsolationLevel.ReadCommitted cancellationToken
+        <| fun trans ->
+            task {
+                try
+                    do! failClaimedTimeTrigger trans.Connection.Query taskId attempts err cancellationToken
+                    let! _ = trans.Commit(cancellationToken)
+                    return ()
+                finally
+                    (trans.Connection :> IDisposable).Dispose()
+            }
+
+    let persistActionScheduleFailure
+        (connectionString: string)
+        (scheduleId: int)
+        (attempts: int)
+        (err: string)
+        (cancellationToken: CancellationToken)
+        : Task<unit> =
+        openAndCheckTransaction loggerFactory connectionString IsolationLevel.ReadCommitted cancellationToken
+        <| fun trans ->
+            task {
+                try
+                    do! failClaimedActionSchedule trans.Connection.Query scheduleId attempts err cancellationToken
+                    let! _ = trans.Commit(cancellationToken)
+                    return ()
+                finally
+                    (trans.Connection :> IDisposable).Dispose()
+            }
+
+    // Phase B: run the claimed time trigger inside the SERIALIZABLE ctx obtained from the cache.
+    // Retries on ConcurrentUpdateException (SSI / row-level concurrent update) with exponential
+    // backoff. If the user's JS trigger code itself throws, we return a terminal Error — do NOT
+    // retry a user-visible failure. Same semantics as runWithApi in HTTP/Utils.fs.
+    //
+    // Returns:
+    //   Ok () — trigger ran and completion was committed
+    //   Error err — trigger failed terminally (either JS error or SSI retries exhausted);
+    //               caller must persist the failure via Phase C.
+    let runClaimedTimeTrigger
+        (connectionString: string)
+        (claimedTask: ClaimedTimeTriggerTask)
+        (cancellationToken: CancellationToken)
+        : Task<Result<unit, string>> =
         task {
-            let mutable processed = 0
-            let mutable shouldContinue = true
+            let mutable attempt = 0
+            let mutable result: Result<unit, string> option = None
 
-            while shouldContinue
-                  && processed < maxBatchPerConnection
-                  && not cancellationToken.IsCancellationRequested do
-                let! cache = instancesCache.GetContextCache(connectionString)
+            while Option.isNone result do
+                try
+                    let! cache = instancesCache.GetContextCache(connectionString)
+                    use! ctx = cache.GetCache(cancellationToken)
 
-                use! ctx = cache.GetCache(cancellationToken)
+                    let reqParams =
+                        { Context = ctx
+                          UserName = "__time_trigger_worker"
+                          IsRoot = true
+                          CanRead = true
+                          Language = "en"
+                          Theme = "default"
+                          Quota = { MaxSize = None; MaxUsers = None } }
 
-                let reqParams =
-                    { Context = ctx
-                      UserName = "__time_trigger_worker"
-                      IsRoot = true
-                      CanRead = true
-                      Language = "en"
-                      Theme = "default"
-                      Quota = { MaxSize = None; MaxUsers = None } }
+                    let! rctx = RequestContext.Create(reqParams)
+                    let _api = OzmaDBAPI(rctx)
 
-                let! rctx = RequestContext.Create(reqParams)
-                let _api = OzmaDBAPI(rctx)
-
-                let! maybeClaimedTimeTask = tryClaimDueTimeTrigger ctx.Transaction.Connection.Query cancellationToken
-
-                let! maybeClaimedActionSchedule =
-                    match maybeClaimedTimeTask with
-                    | Some _ -> Task.result None
-                    | None -> tryClaimDueActionSchedule ctx.Transaction.Connection.Query cancellationToken
-
-                match maybeClaimedTimeTask, maybeClaimedActionSchedule with
-                | None, None ->
-                    let! commitResult = ctx.Commit()
-
-                    match commitResult with
-                    | Ok() -> shouldContinue <- false
-                    | Error err ->
-                        logger.LogError("Failed to commit empty scheduler transaction: {error}", err.LogMessage)
-                        shouldContinue <- false
-                | Some claimedTask, _ ->
                     match ctx.FindTrigger claimedTask.Trigger with
                     | None ->
                         logger.LogWarning(
@@ -105,6 +170,15 @@ type TimeTriggersWorker
                         )
 
                         do! completeClaimedTimeTrigger ctx.Transaction.Connection.Query claimedTask.Id cancellationToken
+
+                        let! commitResult = ctx.Commit()
+
+                        match commitResult with
+                        | Ok() -> result <- Some(Ok())
+                        | Error err ->
+                            logger.LogError("Failed to commit stale time-trigger removal: {error}", err.LogMessage)
+
+                            result <- Some(Error(err.Message))
                     | Some preparedTrigger ->
                         let! runResult =
                             task {
@@ -138,6 +212,15 @@ type TimeTriggersWorker
                                     ctx.Transaction.Connection.Query
                                     claimedTask.Id
                                     cancellationToken
+
+                            let! commitResult = ctx.Commit()
+
+                            match commitResult with
+                            | Ok() -> result <- Some(Ok())
+                            | Error err ->
+                                logger.LogError("Failed to commit time-trigger transaction: {error}", err.LogMessage)
+
+                                result <- Some(Error(err.Message))
                         | Error err ->
                             logger.LogError(
                                 "Time trigger execution failed for {trigger} (task {id}): {error}",
@@ -146,22 +229,64 @@ type TimeTriggersWorker
                                 err
                             )
 
-                            do!
-                                failClaimedTimeTrigger
-                                    ctx.Transaction.Connection.Query
-                                    claimedTask.Id
-                                    claimedTask.Attempts
-                                    err
-                                    cancellationToken
+                            result <- Some(Error err)
+                with :? ConcurrentUpdateException as e ->
+                    if attempt >= maxSerializableRetries then
+                        logger.LogError(
+                            e,
+                            "Concurrent update on time trigger {trigger} (task {id}); giving up after {attempt} retries",
+                            claimedTask.Trigger,
+                            claimedTask.Id,
+                            attempt
+                        )
 
-                    let! commitResult = ctx.Commit()
+                        result <- Some(Error(fullUserMessage e))
+                    else
+                        let jitter = Random.Shared.Next(retryJitterMs)
+                        let delay = min maxRetryDelayMs ((baseRetryDelayMs * (1 <<< attempt)) + jitter)
 
-                    match commitResult with
-                    | Ok() -> processed <- processed + 1
-                    | Error err ->
-                        logger.LogError("Failed to commit time-trigger transaction: {error}", err.LogMessage)
-                        shouldContinue <- false
-                | None, Some claimedSchedule ->
+                        logger.LogWarning(
+                            e,
+                            "Concurrent update on time trigger {trigger} (task {id}) attempt {attempt}/{max}, retrying in {delay}ms",
+                            claimedTask.Trigger,
+                            claimedTask.Id,
+                            attempt + 1,
+                            maxSerializableRetries,
+                            delay
+                        )
+
+                        do! Task.Delay(delay, cancellationToken)
+                        attempt <- attempt + 1
+
+            return Option.get result
+        }
+
+    let runClaimedActionSchedule
+        (connectionString: string)
+        (claimedSchedule: ClaimedActionSchedule)
+        (cancellationToken: CancellationToken)
+        : Task<Result<unit, string>> =
+        task {
+            let mutable attempt = 0
+            let mutable result: Result<unit, string> option = None
+
+            while Option.isNone result do
+                try
+                    let! cache = instancesCache.GetContextCache(connectionString)
+                    use! ctx = cache.GetCache(cancellationToken)
+
+                    let reqParams =
+                        { Context = ctx
+                          UserName = "__time_trigger_worker"
+                          IsRoot = true
+                          CanRead = true
+                          Language = "en"
+                          Theme = "default"
+                          Quota = { MaxSize = None; MaxUsers = None } }
+
+                    let! rctx = RequestContext.Create(reqParams)
+                    let _api = OzmaDBAPI(rctx)
+
                     match ctx.FindAction claimedSchedule.Action with
                     | None ->
                         logger.LogWarning(
@@ -176,6 +301,15 @@ type TimeTriggersWorker
                                 claimedSchedule.Id
                                 claimedSchedule.DueAt
                                 cancellationToken
+
+                        let! commitResult = ctx.Commit()
+
+                        match commitResult with
+                        | Ok() -> result <- Some(Ok())
+                        | Error err ->
+                            logger.LogError("Failed to commit stale action-schedule removal: {error}", err.LogMessage)
+
+                            result <- Some(Error(err.Message))
                     | Some actionResult ->
                         let! runResult =
                             task {
@@ -208,6 +342,15 @@ type TimeTriggersWorker
                                     claimedSchedule.Id
                                     claimedSchedule.DueAt
                                     cancellationToken
+
+                            let! commitResult = ctx.Commit()
+
+                            match commitResult with
+                            | Ok() -> result <- Some(Ok())
+                            | Error err ->
+                                logger.LogError("Failed to commit action-schedule transaction: {error}", err.LogMessage)
+
+                                result <- Some(Error(err.Message))
                         | Error err ->
                             logger.LogError(
                                 "Scheduled action execution failed for {action} (schedule {id}): {error}",
@@ -216,21 +359,100 @@ type TimeTriggersWorker
                                 err
                             )
 
+                            result <- Some(Error err)
+                with :? ConcurrentUpdateException as e ->
+                    if attempt >= maxSerializableRetries then
+                        logger.LogError(
+                            e,
+                            "Concurrent update on action schedule {action} (id {id}); giving up after {attempt} retries",
+                            claimedSchedule.Action,
+                            claimedSchedule.Id,
+                            attempt
+                        )
+
+                        result <- Some(Error(fullUserMessage e))
+                    else
+                        let jitter = Random.Shared.Next(retryJitterMs)
+                        let delay = min maxRetryDelayMs ((baseRetryDelayMs * (1 <<< attempt)) + jitter)
+
+                        logger.LogWarning(
+                            e,
+                            "Concurrent update on action schedule {action} (id {id}) attempt {attempt}/{max}, retrying in {delay}ms",
+                            claimedSchedule.Action,
+                            claimedSchedule.Id,
+                            attempt + 1,
+                            maxSerializableRetries,
+                            delay
+                        )
+
+                        do! Task.Delay(delay, cancellationToken)
+                        attempt <- attempt + 1
+
+            return Option.get result
+        }
+
+    let processOneConnection (connectionString: string) (cancellationToken: CancellationToken) : Task<int> =
+        task {
+            let mutable processed = 0
+            let mutable shouldContinue = true
+
+            while shouldContinue
+                  && processed < maxBatchPerConnection
+                  && not cancellationToken.IsCancellationRequested do
+                let! maybeClaimedTimeTask, maybeClaimedActionSchedule = claimNextDue connectionString cancellationToken
+
+                match maybeClaimedTimeTask, maybeClaimedActionSchedule with
+                | None, None -> shouldContinue <- false
+                | Some claimedTask, _ ->
+                    let! runResult = runClaimedTimeTrigger connectionString claimedTask cancellationToken
+
+                    match runResult with
+                    | Ok() -> processed <- processed + 1
+                    | Error err ->
+                        try
                             do!
-                                failClaimedActionSchedule
-                                    ctx.Transaction.Connection.Query
+                                persistTimeTriggerFailure
+                                    connectionString
+                                    claimedTask.Id
+                                    claimedTask.Attempts
+                                    err
+                                    cancellationToken
+
+                            processed <- processed + 1
+                        with e ->
+                            logger.LogError(
+                                e,
+                                "Failed to persist time-trigger failure for {trigger} (task {id})",
+                                claimedTask.Trigger,
+                                claimedTask.Id
+                            )
+
+                            shouldContinue <- false
+                | None, Some claimedSchedule ->
+                    let! runResult = runClaimedActionSchedule connectionString claimedSchedule cancellationToken
+
+                    match runResult with
+                    | Ok() -> processed <- processed + 1
+                    | Error err ->
+                        try
+                            do!
+                                persistActionScheduleFailure
+                                    connectionString
                                     claimedSchedule.Id
                                     claimedSchedule.Attempts
                                     err
                                     cancellationToken
 
-                    let! commitResult = ctx.Commit()
+                            processed <- processed + 1
+                        with e ->
+                            logger.LogError(
+                                e,
+                                "Failed to persist action-schedule failure for {action} (id {id})",
+                                claimedSchedule.Action,
+                                claimedSchedule.Id
+                            )
 
-                    match commitResult with
-                    | Ok() -> processed <- processed + 1
-                    | Error err ->
-                        logger.LogError("Failed to commit action-schedule transaction: {error}", err.LogMessage)
-                        shouldContinue <- false
+                            shouldContinue <- false
 
             return processed
         }
