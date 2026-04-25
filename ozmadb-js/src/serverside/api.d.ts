@@ -65,7 +65,11 @@ export interface IOzmaDBAPI {
   writeEvent: (message: string) => void
   writeEventSync: (message: string) => Promise<void>
   cancelWith: (userData: any, message?: string) => any // noreturn
-  finishWith: (status: ActionFinishStatus, userData?: any, message?: string) => void
+  finishWith: (
+    status: ActionFinishStatus,
+    userData?: any,
+    message?: string,
+  ) => void
 }
 
 export declare const OzmaDB: IOzmaDBAPI
