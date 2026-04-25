@@ -485,15 +485,22 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
             match body.Value<string>("status") with
             | null -> "success"
             | s -> s
+
         let userData =
             match body.["userData"] with
             | null -> None
             | t -> Some t
+
         let message =
             match body.Value<string>("message") with
             | null -> None
             | s -> Some s
-        currentFinishInfo <- Some { Status = status; UserData = userData; Message = message }
+
+        currentFinishInfo <-
+            Some
+                { Status = status
+                  UserData = userData
+                  Message = message }
 
     member _.CurrentFinishInfo = currentFinishInfo
 

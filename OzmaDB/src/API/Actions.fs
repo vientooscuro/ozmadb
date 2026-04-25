@@ -52,11 +52,16 @@ type ActionsAPI(api: IOzmaDBAPI) =
                                     let runAction () =
                                         task {
                                             let! res = action.Run(args, ctx.CancellationToken)
+
                                             let finishInfo =
                                                 match action.Runtime with
                                                 | :? OzmaJSEngine as e -> e.CurrentFinishInfo
                                                 | _ -> None
-                                            return Ok { Result = res; FinishInfo = finishInfo }
+
+                                            return
+                                                Ok
+                                                    { Result = res
+                                                      FinishInfo = finishInfo }
                                         }
 
                                     if shouldElevate then

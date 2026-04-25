@@ -800,7 +800,7 @@ type RunActionRequest =
 
 [<NoEquality; NoComparison>]
 type ActionFinishInfo =
-    { Status: string   // "success" | "warning" | "error"
+    { Status: string // "success" | "warning" | "error"
       UserData: JToken option
       Message: string option }
 
