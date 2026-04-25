@@ -480,6 +480,7 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
 
     let errorConstructor = this.Engine.Global.["OzmaDBError"] :?> IJavaScriptObject
 
+    [<ScriptUsage(ScriptAccess.Full)>]
     member _.SetFinishWith(body: JObject) =
         let status =
             match body.Value<string>("status") with
