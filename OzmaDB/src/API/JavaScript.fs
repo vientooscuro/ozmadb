@@ -388,6 +388,10 @@ let private preludeSource =
         cancelWith(userData, message) {
             throw new OzmaDBError({ message, userData });
         };
+
+        finishWith(status, userData, message) {
+            apiProxy.SetFinishWith({ status, userData, message });
+        };
     };
 
     class OzmaDB1 extends OzmaDBCurrent {
