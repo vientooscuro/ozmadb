@@ -481,7 +481,10 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
     let errorConstructor = this.Engine.Global.["OzmaDBError"] :?> IJavaScriptObject
 
     [<ScriptUsage(ScriptAccess.Full)>]
-    member _.SetFinishWith(body: JObject) =
+    member _.SetFinishWith(arg: obj) =
+        use reader = new V8JsonReader(arg)
+        let body = JToken.Load(reader) :?> JObject
+
         let status =
             match body.Value<string>("status") with
             | null -> "success"
