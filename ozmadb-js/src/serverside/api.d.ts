@@ -20,6 +20,8 @@ export declare const renderDate: (date: Date) => string
 export declare const renderFunQLName: (name: string) => string
 export declare const renderFunQLValue: (value: unknown) => string
 
+type ActionFinishStatus = 'success' | 'warning' | 'error'
+
 export interface IOzmaDBAPI {
   getUserView: (
     source: UserViewSource,
@@ -63,6 +65,7 @@ export interface IOzmaDBAPI {
   writeEvent: (message: string) => void
   writeEventSync: (message: string) => Promise<void>
   cancelWith: (userData: any, message?: string) => any // noreturn
+  finishWith: (status: ActionFinishStatus, userData?: any, message?: string) => void
 }
 
 export declare const OzmaDB: IOzmaDBAPI

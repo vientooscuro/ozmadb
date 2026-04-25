@@ -360,8 +360,17 @@ export interface IReferencesTree {
  * Action API responses.
  */
 
+export type ActionFinishStatus = 'success' | 'warning' | 'error'
+
+export interface IActionFinishInfo {
+  status: ActionFinishStatus
+  userData?: unknown
+  message?: string
+}
+
 export interface IActionResult {
   result: unknown
+  finishInfo?: IActionFinishInfo
 }
 
 /*
