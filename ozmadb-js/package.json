@@ -43,6 +43,5 @@
     "eslint-plugin-unused-imports": "^3.2.0",
     "prettier": "^3.3.3",
     "typescript": "^5.5.3"
-  },
-  "packageManager": "yarn@4.14.1"
+  }
 }
