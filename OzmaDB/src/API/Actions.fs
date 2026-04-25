@@ -10,6 +10,7 @@ open OzmaDB.Actions.Run
 open OzmaDB.Permissions.Source
 open OzmaDB.Permissions.Types
 open OzmaDB.API.Types
+open OzmaDB.API.JavaScript
 open OzmaDB.Exception
 
 let private isActionPrivileged (actionRef: ActionRef) (role: ResolvedRole) : bool =
@@ -51,7 +52,11 @@ type ActionsAPI(api: IOzmaDBAPI) =
                                     let runAction () =
                                         task {
                                             let! res = action.Run(args, ctx.CancellationToken)
-                                            return Ok { Result = res }
+                                            let finishInfo =
+                                                match action.Runtime with
+                                                | :? OzmaJSEngine as e -> e.CurrentFinishInfo
+                                                | _ -> None
+                                            return Ok { Result = res; FinishInfo = finishInfo }
                                         }
 
                                     if shouldElevate then
