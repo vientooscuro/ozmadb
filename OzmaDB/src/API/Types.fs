@@ -799,8 +799,15 @@ type RunActionRequest =
       Args: JObject option }
 
 [<NoEquality; NoComparison>]
+type ActionFinishInfo =
+    { Status: string   // "success" | "warning" | "error"
+      UserData: JToken option
+      Message: string option }
+
+[<NoEquality; NoComparison>]
 type ActionResponse =
-    { Result: JObject option }
+    { Result: JObject option
+      FinishInfo: ActionFinishInfo option }
 
     member this.ShouldLog = false
     member this.Details = Map.empty
