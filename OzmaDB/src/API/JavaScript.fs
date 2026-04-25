@@ -439,6 +439,7 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
     inherit SchedulerJSEngine<Task.SerializingTrackingTaskScheduler>(runtime, env)
 
     let mutable topLevelAPI = None: IOzmaDBAPI option
+    let mutable currentFinishInfo: ActionFinishInfo option = None
     let apiHandle = AsyncLocal<APIHandle>()
     let httpPolicy = normalizePolicy settings.HttpPolicy
     let outboxSettings = settings.Outbox
@@ -474,6 +475,23 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
         ignore <| this.Engine.Evaluate(preludeDoc.GetValue(this.Runtime))
 
     let errorConstructor = this.Engine.Global.["OzmaDBError"] :?> IJavaScriptObject
+
+    member _.SetFinishWith(body: JObject) =
+        let status =
+            match body.Value<string>("status") with
+            | null -> "success"
+            | s -> s
+        let userData =
+            match body.["userData"] with
+            | null -> None
+            | t -> Some t
+        let message =
+            match body.Value<string>("message") with
+            | null -> None
+            | s -> Some s
+        currentFinishInfo <- Some { Status = status; UserData = userData; Message = message }
+
+    member _.CurrentFinishInfo = currentFinishInfo
 
     member inline private this.ThrowErrorWithInner (e: #IErrorDetails) (innerException: exn) : 'b =
         let body = this.Json.Serialize(e)
