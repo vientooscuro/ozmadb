@@ -739,8 +739,9 @@ type HttpJobUtils
                 ictx.IsRoot
             )
 
-            let maxConcurrentRetries = 5
+            let maxConcurrentRetries = 10
             let baseDelayMs = 100
+            let maxDelayMs = 2000
             let mutable attempt = 0
             let mutable result: HttpJobResponse option = None
 
@@ -783,9 +784,12 @@ type HttpJobUtils
                         logger.LogError(e, "Concurrent update exception (giving up after {Attempt} retries)", attempt)
                         result <- Some(jobError RIConcurrentUpdate)
                     else
-                        let maxJitter = 50
-                        let jitter = Random.Shared.Next(maxJitter)
-                        let delay = min 2000 ((baseDelayMs * (1 <<< attempt)) + jitter)
+                        // Full jitter: pick a uniformly random delay in [0, exp_backoff].
+                        // Decorrelates retries between concurrent transactions hitting the
+                        // same row (SSI conflicts on hot rows like integration.bot_stats),
+                        // so they stop colliding on every retry tick.
+                        let cap = min maxDelayMs (baseDelayMs * (1 <<< attempt))
+                        let delay = Random.Shared.Next(cap + 1)
 
                         logger.LogWarning(
                             e,
