@@ -2462,7 +2462,13 @@ type private QueryCompiler
 
         let attributeColumns = select.Attributes |> Map.toSeq |> Seq.map compileRowAttr
 
-        let addMetaColumns = flags.MetaColumns && not extra.HasAggregates
+        // System meta columns (per-row `id`, `sub_entity`, puns, domains, `main_id`) make a row
+        // addressable, but they are unique per source row and thus defeat `DISTINCT` (it would
+        // dedup over the hidden id too, turning `SELECT DISTINCT` into a no-op). A distinct row no
+        // longer maps to a single entity row, so — exactly like aggregate selects — we suppress the
+        // navigation meta columns. `DISTINCT` then deduplicates over the user-visible columns only.
+        let addMetaColumns =
+            flags.MetaColumns && not extra.HasAggregates && not select.Distinct
 
         let mutable idColumns = Map.empty: Map<string, DomainIdColumn>
         let mutable lastIdColumn = 1
