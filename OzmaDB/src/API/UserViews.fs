@@ -244,7 +244,7 @@ type UserViewsAPI(api: IOzmaDBAPI) =
             }
 
     member this.GetUserView(req: UserViewRequest) : Task<Result<UserViewEntriesResponse, UserViewErrorInfo>> =
-        wrapAPINoResult rctx "getUserView" req
+        wrapAPIError rctx "getUserView" req
         <| fun () ->
             task {
                 let flags = Option.defaultValue emptyUserViewFlags req.Flags
