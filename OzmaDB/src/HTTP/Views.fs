@@ -23,6 +23,7 @@ type UserViewHTTPRequest =
       NoAttributes: bool
       NoTracking: bool
       NoPuns: bool
+      DeferRequestLinesNumber: bool
       Chunk: SourceQueryChunk option
       PretendRole: ResolvedEntityRef option
       PretendUser: UserName option }
@@ -34,6 +35,7 @@ type UserViewExplainHTTPRequest =
       NoAttributes: bool
       NoTracking: bool
       NoPuns: bool
+      DeferRequestLinesNumber: bool
       Chunk: SourceQueryChunk option
       PretendRole: ResolvedEntityRef option
       PretendUser: UserName option
@@ -64,7 +66,8 @@ let viewsApi (serviceProvider: IServiceProvider) : Endpoint list =
                     { ForceRecompile = flagIfDebug <| boolRequestArg "__force_recompile" ctx
                       NoAttributes = boolRequestArg "__no_attributes" ctx
                       NoTracking = boolRequestArg "__no_tracking" ctx
-                      NoPuns = boolRequestArg "__no_puns" ctx }
+                      NoPuns = boolRequestArg "__no_puns" ctx
+                      DeferRequestLinesNumber = boolRequestArg "__defer_request_lines_number" ctx }
                     : UserViewFlags
 
                 let chunk =
@@ -89,7 +92,8 @@ let viewsApi (serviceProvider: IServiceProvider) : Endpoint list =
             { ForceRecompile = flagIfDebug httpReq.ForceRecompile
               NoAttributes = httpReq.NoAttributes
               NoTracking = httpReq.NoTracking
-              NoPuns = httpReq.NoPuns }
+              NoPuns = httpReq.NoPuns
+              DeferRequestLinesNumber = httpReq.DeferRequestLinesNumber }
             : UserViewFlags
 
         let req =
@@ -120,7 +124,8 @@ let viewsApi (serviceProvider: IServiceProvider) : Endpoint list =
             { ForceRecompile = flagIfDebug <| boolRequestArg "__force_recompile" ctx
               NoAttributes = false
               NoTracking = false
-              NoPuns = false }
+              NoPuns = false
+              DeferRequestLinesNumber = false }
             : UserViewFlags
 
         let req = { Source = source; Flags = Some flags }
@@ -132,7 +137,8 @@ let viewsApi (serviceProvider: IServiceProvider) : Endpoint list =
             { ForceRecompile = flagIfDebug req.ForceRecompile
               NoAttributes = false
               NoTracking = false
-              NoPuns = false }
+              NoPuns = false
+              DeferRequestLinesNumber = false }
             : UserViewFlags
 
         let req = { Source = source; Flags = Some flags }
@@ -157,7 +163,8 @@ let viewsApi (serviceProvider: IServiceProvider) : Endpoint list =
                 { ForceRecompile = flagIfDebug <| boolRequestArg "__force_recompile" ctx
                   NoAttributes = boolRequestArg "__no_attributes" ctx
                   NoTracking = boolRequestArg "__no_tracking" ctx
-                  NoPuns = boolRequestArg "__no_puns" ctx }
+                  NoPuns = boolRequestArg "__no_puns" ctx
+                  DeferRequestLinesNumber = boolRequestArg "__defer_request_lines_number" ctx }
                 : UserViewFlags
 
             let chunk =
@@ -189,7 +196,8 @@ let viewsApi (serviceProvider: IServiceProvider) : Endpoint list =
             { ForceRecompile = flagIfDebug httpReq.ForceRecompile
               NoAttributes = httpReq.NoAttributes
               NoTracking = httpReq.NoTracking
-              NoPuns = httpReq.NoPuns }
+              NoPuns = httpReq.NoPuns
+              DeferRequestLinesNumber = httpReq.DeferRequestLinesNumber }
             : UserViewFlags
 
         let chunk = Option.defaultValue emptySourceQueryChunk httpReq.Chunk

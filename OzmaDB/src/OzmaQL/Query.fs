@@ -766,8 +766,39 @@ let runViewExpr
 
                 processFunc mergedInfo result
 
+            // When the count is deferred, run the plain rows query and evaluate attributes with a
+            // `NULL` count — the client asks for the real number with a separate request.
+            let deferredPlaceholderId =
+                if viewExpr.DeferRequestLinesNumber then
+                    viewExpr.RequestLinesNumberPlaceholderId
+                else
+                    None
+
             let! ret =
                 match viewExpr.RequestLinesNumberPlaceholderId with
+                | _ when viewExpr.DeferRequestLinesNumber ->
+                    task {
+                        let attrsParameters =
+                            match deferredPlaceholderId with
+                            | None -> parameters
+                            | Some placeholderId -> Map.add placeholderId SQL.VNull parameters
+
+                        let! attrsResult = getAttrsResult attrsParameters
+
+                        return!
+                            connection.ExecuteQuery
+                                (prefix + viewExpr.Query.Expression.ToSQLString())
+                                parameters
+                                cancellationToken
+                            <| fun resultColumns rawRows ->
+                                parseResult
+                                    viewExpr.MainRootEntity
+                                    viewExpr.Domains
+                                    viewExpr.Columns
+                                    resultColumns
+                                    rawRows
+                                <| fun info rows -> mergeResults attrsResult info rows
+                    }
                 | None ->
                     task {
                         let! attrsResult = getAttrsResult parameters

@@ -354,7 +354,11 @@ type ExecutedViewExpr =
 [<NoEquality; NoComparison>]
 type UserViewEntriesResponse =
     { Info: UserViewInfo
-      Result: ExecutedViewExpr }
+      Result: ExecutedViewExpr
+      // Set when the view uses `request_lines_number()` but the client asked to defer counting;
+      // attributes are returned with a `NULL` count and the client is expected to fetch it separately.
+      [<DataMember(EmitDefaultValue = false)>]
+      DeferredRequestLinesNumber: bool }
 
     member this.ShouldLog = false
     member this.Details = Map.empty
@@ -385,13 +389,16 @@ type UserViewFlags =
       [<DataMember(EmitDefaultValue = false)>]
       NoTracking: bool
       [<DataMember(EmitDefaultValue = false)>]
-      NoPuns: bool }
+      NoPuns: bool
+      [<DataMember(EmitDefaultValue = false)>]
+      DeferRequestLinesNumber: bool }
 
 let emptyUserViewFlags =
     { ForceRecompile = false
       NoAttributes = false
       NoTracking = false
-      NoPuns = false }
+      NoPuns = false
+      DeferRequestLinesNumber = false }
     : UserViewFlags
 
 type UserViewInfoRequest =

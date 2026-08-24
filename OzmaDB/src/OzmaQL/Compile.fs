@@ -455,6 +455,9 @@ type CompiledViewExpr =
     { Pragmas: CompiledPragmasMap
       RequestLinesNumberPlaceholderId: int option
       RequestLinesNumberBaseExpression: SQL.SelectExpr option
+      // When set, `request_lines_number()` is not computed at all and attributes get `NULL` instead;
+      // the client fetches the count with a separate request.
+      DeferRequestLinesNumber: bool
       SingleRowQuery: CompiledSingleRowExpr
       Query: Query<SQL.SelectExpr>
       UsedDatabase: FlatUsedDatabase
@@ -4226,6 +4229,7 @@ let compileViewExpr
         else
             None
       RequestLinesNumberBaseExpression = None
+      DeferRequestLinesNumber = false
       SingleRowQuery = attrQuery
       Query =
         { Expression = perRowExpr

@@ -263,8 +263,17 @@ type UserViewsAPI(api: IOzmaDBAPI) =
                         let chunk = Option.defaultValue emptySourceQueryChunk req.Chunk
                         let resolvedChunk = resolveViewExprChunk ctx.Layout compiled chunk
 
+                        // Counting all matching rows requires running the query without a limit, which
+                        // roughly doubles the cost. Clients that render the count lazily ask us to skip it.
+                        let deferRequestLinesNumber =
+                            flags.DeferRequestLinesNumber
+                            && Option.isSome compiled.RequestLinesNumberPlaceholderId
+
                         let (extraLocalArgs, query, baseQuery) =
-                            if Option.isSome compiled.RequestLinesNumberPlaceholderId then
+                            if
+                                Option.isSome compiled.RequestLinesNumberPlaceholderId
+                                && not deferRequestLinesNumber
+                            then
                                 queryExprChunkWithRequestLinesBase ctx.Layout resolvedChunk compiled.Query
                             else
                                 let (extraLocalArgs, query) = queryExprChunk ctx.Layout resolvedChunk compiled.Query
@@ -275,8 +284,12 @@ type UserViewsAPI(api: IOzmaDBAPI) =
                         let compiled =
                             { compiled with
                                 Query = query
+                                DeferRequestLinesNumber = deferRequestLinesNumber
                                 RequestLinesNumberBaseExpression =
-                                    if Option.isSome compiled.RequestLinesNumberPlaceholderId then
+                                    if
+                                        Option.isSome compiled.RequestLinesNumberPlaceholderId
+                                        && not deferRequestLinesNumber
+                                    then
                                         Some baseQuery.Expression
                                     else
                                         None }
@@ -315,7 +328,11 @@ type UserViewsAPI(api: IOzmaDBAPI) =
                                 ctx.CancellationToken
                                 getResult
 
-                        return Ok { Info = uv.Info; Result = res }
+                        return
+                            Ok
+                                { Info = uv.Info
+                                  Result = res
+                                  DeferredRequestLinesNumber = deferRequestLinesNumber }
                     with
                     | :? ChunkException as e when e.IsUserException ->
                         logger.LogError(e, "Failed to parse chunk for user view {uv}", req.Source)
