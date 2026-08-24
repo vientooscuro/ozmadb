@@ -133,13 +133,16 @@ interface IUserViewCommonRequest extends IQueryChunk {
 interface IUserViewEntriesRequest extends IUserViewCommonRequest {}
 
 interface IAnonymousUserViewEntriesRequest
-  extends IUserViewEntriesRequest, IAnonymousUserViewRequest {}
+  extends IUserViewEntriesRequest,
+    IAnonymousUserViewRequest {}
 
 interface IUserViewExplainRequest
-  extends IUserViewCommonRequest, IExplainFlags {}
+  extends IUserViewCommonRequest,
+    IExplainFlags {}
 
 interface IAnonymousUserViewExplainRequest
-  extends IUserViewExplainRequest, IAnonymousUserViewRequest {}
+  extends IUserViewExplainRequest,
+    IAnonymousUserViewRequest {}
 
 interface IDomainsCommonRequest extends IQueryChunk {
   rowId?: number
@@ -173,7 +176,8 @@ const splitTransportOpts = <T extends ITransportOpts>(
 }
 
 export interface IEntriesExplainOpts
-  extends IEntriesRequestOpts, IExplainFlags {}
+  extends IEntriesRequestOpts,
+    IExplainFlags {}
 
 export interface IInsertEntityOp {
   type: 'insert'
@@ -201,7 +205,10 @@ export interface ICommandOp {
 }
 
 export type TransactionOp =
-  IInsertEntityOp | IUpdateEntityOp | IDeleteEntityOp | ICommandOp
+  | IInsertEntityOp
+  | IUpdateEntityOp
+  | IDeleteEntityOp
+  | ICommandOp
 
 export interface ITransaction {
   operations: TransactionOp[]
@@ -224,7 +231,9 @@ export interface IDeleteEntityResult {
 }
 
 export type TransactionOpResult =
-  IInsertEntityResult | IUpdateEntityResult | IDeleteEntityResult
+  | IInsertEntityResult
+  | IUpdateEntityResult
+  | IDeleteEntityResult
 
 export interface ITransactionResult {
   results: TransactionOpResult[]
