@@ -133,16 +133,13 @@ interface IUserViewCommonRequest extends IQueryChunk {
 interface IUserViewEntriesRequest extends IUserViewCommonRequest {}
 
 interface IAnonymousUserViewEntriesRequest
-  extends IUserViewEntriesRequest,
-    IAnonymousUserViewRequest {}
+  extends IUserViewEntriesRequest, IAnonymousUserViewRequest {}
 
 interface IUserViewExplainRequest
-  extends IUserViewCommonRequest,
-    IExplainFlags {}
+  extends IUserViewCommonRequest, IExplainFlags {}
 
 interface IAnonymousUserViewExplainRequest
-  extends IUserViewExplainRequest,
-    IAnonymousUserViewRequest {}
+  extends IUserViewExplainRequest, IAnonymousUserViewRequest {}
 
 interface IDomainsCommonRequest extends IQueryChunk {
   rowId?: number
@@ -154,17 +151,29 @@ interface IDomainsRequest extends IDomainsCommonRequest {}
 
 interface IDomainsExplainRequest extends IDomainsCommonRequest, IExplainFlags {}
 
-export interface IInfoRequestOpts {}
+// Transport-level options, never sent as a part of the request body.
+export interface ITransportOpts {
+  signal?: AbortSignal
+}
 
-export interface IEntriesRequestOpts {
+export interface IInfoRequestOpts extends ITransportOpts {}
+
+export interface IEntriesRequestOpts extends ITransportOpts {
   chunk?: IQueryChunk
   pretendUser?: string
   pretendRole?: IEntityRef
 }
 
+// Splits transport-level options away from the ones that belong to the request body.
+const splitTransportOpts = <T extends ITransportOpts>(
+  opts?: T,
+): { signal?: AbortSignal; body: Omit<T, keyof ITransportOpts> } => {
+  const { signal, ...body } = opts ?? ({} as T)
+  return { signal, body }
+}
+
 export interface IEntriesExplainOpts
-  extends IEntriesRequestOpts,
-    IExplainFlags {}
+  extends IEntriesRequestOpts, IExplainFlags {}
 
 export interface IInsertEntityOp {
   type: 'insert'
@@ -192,10 +201,7 @@ export interface ICommandOp {
 }
 
 export type TransactionOp =
-  | IInsertEntityOp
-  | IUpdateEntityOp
-  | IDeleteEntityOp
-  | ICommandOp
+  IInsertEntityOp | IUpdateEntityOp | IDeleteEntityOp | ICommandOp
 
 export interface ITransaction {
   operations: TransactionOp[]
@@ -218,9 +224,7 @@ export interface IDeleteEntityResult {
 }
 
 export type TransactionOpResult =
-  | IInsertEntityResult
-  | IUpdateEntityResult
-  | IDeleteEntityResult
+  IInsertEntityResult | IUpdateEntityResult | IDeleteEntityResult
 
 export interface ITransactionResult {
   results: TransactionOpResult[]
@@ -243,6 +247,7 @@ interface IOzmaDBRequestInit {
   method?: string
   headers?: Record<string, string>
   body?: Blob | string
+  signal?: AbortSignal
 }
 
 export default class OzmaDBClient {
@@ -281,6 +286,7 @@ export default class OzmaDBClient {
                   : {
                       Authorization: `Bearer ${this.token}`,
                     },
+              signal: opts?.signal,
             },
           )
           if (!newResponse.ok) {
@@ -325,6 +331,7 @@ export default class OzmaDBClient {
     subUrl: string,
     method: string,
     body?: unknown,
+    signal?: AbortSignal,
   ): Promise<unknown> {
     return this.fetchJson(`${this.apiUrl}/${subUrl}`, {
       method,
@@ -332,6 +339,7 @@ export default class OzmaDBClient {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
+      signal,
     })
   }
 
@@ -351,22 +359,29 @@ export default class OzmaDBClient {
   }
 
   // We use `POST` method to ensure we won't bloat URLs and to have full access to Chunk APIs.
-  private getUserView = (path: string, body: any): Promise<IViewExprResult> => {
+  private getUserView = (
+    path: string,
+    body: any,
+    signal?: AbortSignal,
+  ): Promise<IViewExprResult> => {
     return this.fetchJsonApi(
       `views/${path}/entries`,
       'POST',
       body,
+      signal,
     ) as Promise<IViewExprResult>
   }
 
   private getUserViewInfo = (
     path: string,
     body: any,
+    signal?: AbortSignal,
   ): Promise<IViewInfoResult> => {
     return this.fetchJsonApi(
       `views/${path}/info`,
       'POST',
       body,
+      signal,
     ) as Promise<IViewInfoResult>
   }
 
@@ -386,12 +401,13 @@ export default class OzmaDBClient {
     args?: Record<string, unknown>,
     opts?: IEntriesRequestOpts,
   ): Promise<IViewExprResult> => {
+    const { signal, body } = splitTransportOpts(opts)
     const req: IAnonymousUserViewEntriesRequest = {
-      ...opts,
+      ...body,
       query,
       args,
     }
-    return this.getUserView('anonymous', req)
+    return this.getUserView('anonymous', req, signal)
   }
 
   getNamedUserView = (
@@ -399,18 +415,24 @@ export default class OzmaDBClient {
     args?: Record<string, unknown>,
     opts?: IEntriesRequestOpts,
   ): Promise<IViewExprResult> => {
+    const { signal, body } = splitTransportOpts(opts)
     const req: IUserViewEntriesRequest = {
-      ...opts,
+      ...body,
       args,
     }
-    return this.getUserView(`by_name/${ref.schema}/${ref.name}`, req)
+    return this.getUserView(`by_name/${ref.schema}/${ref.name}`, req, signal)
   }
 
   getNamedUserViewInfo = (
     ref: IUserViewRef,
     opts?: IInfoRequestOpts,
   ): Promise<IViewInfoResult> => {
-    return this.getUserViewInfo(`by_name/${ref.schema}/${ref.name}`, opts)
+    const { signal, body } = splitTransportOpts(opts)
+    return this.getUserViewInfo(
+      `by_name/${ref.schema}/${ref.name}`,
+      body,
+      signal,
+    )
   }
 
   getAnonymousUserViewExplain = (
