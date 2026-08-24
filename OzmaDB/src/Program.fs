@@ -1,5 +1,6 @@
 open System
 open System.IO
+open System.IO.Compression
 open System.Linq
 open System.Threading
 open System.Threading.Tasks
@@ -8,6 +9,7 @@ open Newtonsoft.Json
 open Microsoft.AspNetCore.Http
 open Microsoft.AspNetCore.Builder
 open Microsoft.AspNetCore.Routing
+open Microsoft.AspNetCore.ResponseCompression
 open Microsoft.Extensions.Hosting
 open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.DependencyInjection
@@ -415,6 +417,28 @@ let private setupRateLimiting (webAppBuilder: WebApplicationBuilder) =
     // Needed for the strategy, but we ignore it in RateLimit.fs. Painful...
     addRateLimiter services
 
+let private setupResponseCompression (webAppBuilder: WebApplicationBuilder) =
+    let configureCompression (options: ResponseCompressionOptions) =
+        // We usually sit behind a TLS-terminating proxy, but can also be exposed directly.
+        // BREACH doesn't apply: we authenticate with bearer tokens only, so a cross-origin
+        // request can't carry the caller's credentials.
+        options.EnableForHttps <- true
+        options.Providers.Add<BrotliCompressionProvider>()
+        options.Providers.Add<GzipCompressionProvider>()
+
+    // Both providers are pinned explicitly: gzip defaults to `Fastest`, which costs us
+    // about a third of the compression ratio on JSON for a couple of milliseconds saved.
+    let configureBrotli (options: BrotliCompressionProviderOptions) =
+        options.Level <- CompressionLevel.Optimal
+
+    let configureGzip (options: GzipCompressionProviderOptions) =
+        options.Level <- CompressionLevel.Optimal
+
+    let services = webAppBuilder.Services
+    ignore <| services.AddResponseCompression(configureCompression)
+    ignore <| services.Configure<BrotliCompressionProviderOptions>(configureBrotli)
+    ignore <| services.Configure<GzipCompressionProviderOptions>(configureGzip)
+
 let private setupJSON (webAppBuilder: WebApplicationBuilder) =
     ignore
     <| webAppBuilder.Services.AddSingleton<Json.ISerializer>(NewtonsoftJson.Serializer defaultJsonSettings)
@@ -654,6 +678,7 @@ let private setupApp (app: IApplicationBuilder) =
     ignore
     <| app
         .UseSerilogRequestLogging()
+        .UseResponseCompression()
         .UseHttpMetrics(configureMetrics)
         .UseHttpMethodOverride()
         .UseCors(configureCors)
@@ -688,6 +713,7 @@ let main (args: string[]) : int =
             setupAuthentication webAppBuilder
             setupRedis webAppBuilder
             setupRateLimiting webAppBuilder
+            setupResponseCompression webAppBuilder
             setupJSON webAppBuilder
             setupEventLogger webAppBuilder
             setupInstancesCache webAppBuilder
