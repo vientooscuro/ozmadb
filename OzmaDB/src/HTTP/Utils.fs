@@ -233,12 +233,14 @@ let private responseBufferSize = 32768
 // Convert that to async when we move to System.Text.Json
 let jsonJobDataWriter (response: 'a) : JobDataWriter =
     let writer (stream: Stream) (cancellationToken: CancellationToken) =
-        use streamWriter =
-            new StreamWriter(stream, utf8EncodingWithoutBom, responseBufferSize, true)
+        OzmaDB.Metrics.measureStage "serialize"
+        <| fun () ->
+            use streamWriter =
+                new StreamWriter(stream, utf8EncodingWithoutBom, responseBufferSize, true)
 
-        use jsonTextWriter = new JsonTextWriter(streamWriter)
-        let jsonSerializer = JsonSerializer.CreateDefault()
-        jsonSerializer.Serialize(jsonTextWriter, response)
+            use jsonTextWriter = new JsonTextWriter(streamWriter)
+            let jsonSerializer = JsonSerializer.CreateDefault()
+            jsonSerializer.Serialize(jsonTextWriter, response)
 
     JOSync writer
 

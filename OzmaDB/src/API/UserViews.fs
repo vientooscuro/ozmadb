@@ -57,12 +57,14 @@ let private getReadRoleWithRef =
 // Restricting a view to a role rewrites the whole query AST, so go through the context cache
 // whenever we have a role reference to key it on.
 let private applyReadRole (ctx: IContext) (roleType: RoleType) (compiled: CompiledViewExpr) =
-    match getReadRoleWithRef roleType with
-    | None -> compiled
-    | Some(Some roleRef, role) -> ctx.GetRoleView compiled roleRef role
-    | Some(None, role) ->
-        let appliedDb = applyPermissions ctx.Layout role compiled.UsedDatabase
-        applyRoleViewExpr ctx.Layout appliedDb compiled
+    OzmaDB.Metrics.measureStage "permissions"
+    <| fun () ->
+        match getReadRoleWithRef roleType with
+        | None -> compiled
+        | Some(Some roleRef, role) -> ctx.GetRoleView compiled roleRef role
+        | Some(None, role) ->
+            let appliedDb = applyPermissions ctx.Layout role compiled.UsedDatabase
+            applyRoleViewExpr ctx.Layout appliedDb compiled
 
 let private removeColumnAttributes (col: UserViewColumn) =
     { col with

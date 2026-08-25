@@ -201,7 +201,12 @@ let private npgsqlValue: Value -> NpgsqlDbType option * obj =
 type QueryConnection(loggerFactory: ILoggerFactory, connection: NpgsqlConnection) =
     let logger = loggerFactory.CreateLogger<QueryConnection>()
 
-    let withCommand (queryStr: string) (pars: ExprParameters) (runFunc: NpgsqlCommand -> Task<'a>) : Task<'a> =
+    let withCommand
+        (kind: string)
+        (queryStr: string)
+        (pars: ExprParameters)
+        (runFunc: NpgsqlCommand -> Task<'a>)
+        : Task<'a> =
         task {
             use command = new NpgsqlCommand(queryStr, connection)
 
@@ -214,7 +219,7 @@ type QueryConnection(loggerFactory: ILoggerFactory, connection: NpgsqlConnection
                 logger.LogDebug("Executing query with args {args}: {query}", pars, queryStr)
 
             try
-                return! runFunc command
+                return! OzmaDB.Metrics.measureSqlTask kind (fun () -> runFunc command)
             with
             // 40001: could not serialize access due to concurrent update
             | :? PostgresException as e when e.SqlState = "40001" ->
@@ -244,7 +249,7 @@ type QueryConnection(loggerFactory: ILoggerFactory, connection: NpgsqlConnection
         (pars: ExprParameters)
         (cancellationToken: CancellationToken)
         : Task<int> =
-        withCommand queryStr pars
+        withCommand "nonquery" queryStr pars
         <| fun command -> command.ExecuteNonQueryAsync(cancellationToken)
 
     member this.ExecuteValueQuery
@@ -264,7 +269,7 @@ type QueryConnection(loggerFactory: ILoggerFactory, connection: NpgsqlConnection
         (pars: ExprParameters)
         (cancellationToken: CancellationToken)
         : Task<(SQLName * SimpleValueType * Value)[] option> =
-        withCommand queryStr pars
+        withCommand "row" queryStr pars
         <| fun command ->
             task {
                 use! reader = command.ExecuteReaderAsync(cancellationToken)
@@ -327,7 +332,7 @@ type QueryConnection(loggerFactory: ILoggerFactory, connection: NpgsqlConnection
         (cancellationToken: CancellationToken)
         (processFunc: (SQLName * SimpleValueType)[] -> IAsyncEnumerable<Value[]> -> Task<'a>)
         : Task<'a> =
-        withCommand queryStr pars
+        withCommand "query" queryStr pars
         <| fun command ->
             task {
                 use! reader = command.ExecuteReaderAsync(cancellationToken)

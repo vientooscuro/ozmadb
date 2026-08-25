@@ -26,6 +26,7 @@
   <ItemGroup>
     <Compile Include="src/Exception.fs" />
     <Compile Include="src/Parsing.fs" />
+    <Compile Include="src/Metrics.fs" />
 
     <Compile Include="src/SQL/Utils.fs" />
     <Compile Include="src/SQL/Parsing.fs" />

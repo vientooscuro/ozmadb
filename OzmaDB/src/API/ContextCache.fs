@@ -212,8 +212,11 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
             applyRoleViewExpr layout appliedDb compiled
         else
             match entry.Views.TryGetValue roleRef with
-            | (true, applied) -> applied
+            | (true, applied) ->
+                OzmaDB.Metrics.roleViewCacheHit ()
+                applied
             | (false, _) ->
+                OzmaDB.Metrics.roleViewCacheMiss ()
                 // Deliberately not memoizing failures: applying permissions raises when access is
                 // denied, and that check has to run again on the next request.
                 let appliedDb = applyPermissions layout role compiled.UsedDatabase
@@ -1057,7 +1060,9 @@ for insert into
             // We get the cached state in a separate transaction to minimize locking.
             // This can lead to races with database migrations, but it should only lead to
             // rare errors and no permission issues.
-            let! (connection, oldState) = getCachedState initialCancellationToken
+            let! (connection, oldState) =
+                OzmaDB.Metrics.measureStageTask "state" (fun () -> getCachedState initialCancellationToken)
+
             let! transaction = DatabaseTransaction.Begin(connection)
 
             try
