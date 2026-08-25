@@ -1,0 +1,212 @@
+# Разбор двух медленных страниц: `fin.transactions_table_all` и `marketing.campaigns_table`
+
+Замеры сняты на локальном стенде `ozma` (копия прода), PostgreSQL 16 в соседнем контейнере, OzmaDB после перф-правок из [performance-analysis.md](performance-analysis.md).
+
+## Измерения
+
+### Тайминги ответа сервера (из логов OzmaDB, последовательные вызовы)
+
+| вызов | `fin/transactions_table_all` | `marketing/campaigns_table` |
+|---|---|---|
+| 1 | 431 мс | 971 мс |
+| 2 | 497 мс | 737 мс |
+| 3 | 848 мс | 476 мс |
+| 4 | 403 мс | 417 мс |
+| 5 | 265 мс | |
+| 6 | 138 мс | |
+| 7 | 181 мс | |
+| 8 | 145 мс | |
+
+Время падает втрое после пятого вызова. Это ровно `AutoPrepareMinUsages = 5` в Npgsql: до пятого раза PostgreSQL планирует запрос заново каждый раз, после — план переиспользуется.
+
+### Что показывает EXPLAIN ANALYZE
+
+| | планирование | выполнение |
+|---|---|---|
+| `fin.transactions_table_all` (limit 50) | **79 мс** | 168 мс |
+| `marketing.campaigns_table` (limit 51) | 30 мс | **376 мс** |
+
+**Главный вывод: обе страницы упираются в PostgreSQL, а не в OzmaDB.** На прогретом плане на движок и сериализацию приходится порядка 20–40 мс из 140–180 мс у транзакций и 50–80 мс из 420–480 мс у кампаний. Дальнейшая оптимизация F#-кода этих страниц не ускорит — работать надо с запросами, индексами и с тем, какой SQL порождает компилятор.
+
+---
+
+## `fin.transactions_table_all`
+
+Таблица: 36 015 строк, 21 МБ. Сгенерированный SQL: **59 КБ, 40 SELECT**.
+
+### 1. `request_lines_number()` удваивает всю работу
+
+Компилятор оборачивает запрос так:
+
+```sql
+WITH __request_lines_base AS (<весь запрос без LIMIT>),
+     __request_lines_chunk AS (<то же самое с LIMIT>)
+SELECT __request_lines_meta.total, __request_lines_chunk.*
+FROM __request_lines_chunk
+CROSS JOIN (SELECT count(*) FROM __request_lines_base) __request_lines_meta
+```
+
+В плане это видно прямо: `Seq Scan on transactions` идёт с `loops=2`, обрабатывая по 13 958 строк, и `Sort` на 13 958 строк тоже выполняется дважды — 33 и 36 мс. То есть ради счётчика «(27915)» в заголовке страница делает всю работу второй раз.
+
+**Что делать.** В движке уже есть флаг `__defer_request_lines_number` — счётчик тогда запрашивается отдельно и лениво. Для таблицы на 50 строк это примерно вдвое дешевле. Если счётчик нужен всегда, второй вариант — считать его приблизительно (`reltuples` с поправкой на фильтр) и уточнять по требованию.
+
+### 2. Нет индекса под сортировку
+
+```
+ORDER BY transactions.is_deleted, transaction_date DESC, transactions.id DESC
+WHERE tks_state IN ('CONFIRMED','AUTHORIZED','PARTIAL_REFUNDED','REFUNDED','SIGNED')
+```
+
+Все индексы на таблице — это `__refindex__*` по ссылочным полям плюс GIN на `lower(comment)`. По `transaction_date` индекса нет вообще, поэтому PostgreSQL делает Seq Scan и сортирует 13 958 строк — дважды, см. пункт 1.
+
+```sql
+CREATE INDEX CONCURRENTLY ON fin.transactions (is_deleted, transaction_date DESC, id DESC)
+  WHERE tks_state IN ('CONFIRMED','AUTHORIZED','PARTIAL_REFUNDED','REFUNDED','SIGNED');
+```
+
+С таким индексом первые 50 строк берутся сразу, без сортировки всей выборки.
+
+### 3. Один и тот же подзапрос скопирован пять раз
+
+В FunQL колонка `payment_stage` выглядит так:
+
+```
+(SELECT psh.stage FROM base.people_stages_history AS psh
+ WHERE psh.person = p.id AND psh.date_create <= transactions.transaction_date
+ ORDER BY psh.date_create DESC LIMIT 1) as "payment_stage" @{
+    option_variant = case
+        when (<тот же самый подзапрос целиком>) = 'Холодный' then 'warming-cold'
+        when (<тот же самый подзапрос целиком>) = 'Прохладный' then 'warming-cool'
+        when (<тот же самый подзапрос целиком>) = 'Теплый' then 'warming-warm'
+        when (<тот же самый подзапрос целиком>) = 'Горячий' then 'warming-hot'
+    end
+}
+```
+
+Плюс он же в `WHERE` для `$diff_stage` и `$payment_stage`. Итого в сгенерированном SQL **14 обращений к `people_stages_history`**, а к `fin.pl_report_final` — **36**.
+
+**Что делать.** Вынести значение один раз и сравнивать с ним:
+
+```
+(SELECT psh.stage FROM base.people_stages_history AS psh
+ WHERE psh.person = p.id AND psh.date_create <= transactions.transaction_date
+ ORDER BY psh.date_create DESC LIMIT 1) as payment_stage @{
+    option_variant = case payment_stage
+        when 'Холодный' then 'warming-cold'
+        when 'Прохладный' then 'warming-cool'
+        when 'Теплый' then 'warming-warm'
+        when 'Горячий' then 'warming-hot'
+    end
+}
+```
+
+Если ссылаться на алиас колонки из её же атрибута нельзя, стоит сделать `payment_stage` вычисляемым полем сущности `fin.transactions` — тогда и подзапрос будет один, и его можно проиндексировать.
+
+То же самое с `exists (select 1 from fin.pl_report_final ...)`: он вычисляется и в `cell_variant` колонки `id`, и в колонке `is_added_to_pl_report`.
+
+### 4. Невидимые колонки всё равно считаются
+
+`is_added_to_pl_report` помечена `visible = false`, но остаётся в SELECT и выполняет `EXISTS` на каждую строку. То же с `customer`, `account_from_type`, `from_our_organization`, `account_from=>contractor`. Пока движок их не отбрасывает (см. предложение по движку ниже), дешевле убрать их из запроса вручную, если они нужны только UI-логике.
+
+### 5. Планирование 79–97 мс
+
+Прямое следствие размера: 59 КБ SQL, 40 SELECT, десятки JOIN. Планировщик PostgreSQL нелинейно чувствителен к числу соединений. Сокращение дублей из пунктов 3 и 4 уменьшит не только выполнение, но и планирование.
+
+---
+
+## `marketing.campaigns_table`
+
+Кампаний всего 2201, отдаётся 51 строка — а запрос идёт 376 мс. Причина в плане видна сразу.
+
+### 1. N+1: 11 430 итераций ради 51 строки
+
+```
+Index Scan on actions              loops=11430
+Index Scan on contacts             loops=11430
+Index Scan on communication_ways   loops=11381
+```
+
+То есть на каждую из 51 кампании приходится примерно 224 обращения к этим таблицам. Источник — колонка `total_emails`:
+
+```
+select count(...) from (
+    select x.id from pm.actions as x where x.from_campaign = campaigns.id
+    union
+    select y.id from pm.actions as y
+    where y.parent_action in (select z.id from pm.actions as z where z.from_campaign = campaigns.id)
+)
+```
+
+Для каждой строки это два прохода по `pm.actions` (589 455 строк, 172 МБ), плюс `UNION` с дедупликацией. Обращения к `contacts` и `communication_ways` с той же кратностью — это подстановки отображаемых имён (pun) для ссылочных полей, которые тянут за собой цепочку вычисляемых полей.
+
+**Что делать.** Переписать через один проход с агрегацией по `from_campaign`, либо материализовать счётчик писем в поле кампании и обновлять его триггером. Второе предпочтительнее: для табличного представления счётчик почти всегда можно считать заранее, а не на каждый показ.
+
+### 2. Пять отдельных `count()` по одной таблице
+
+Колонки `total_sent_emails`, `total_delivered_emails`, `total_read_emails`, `total_visited_links`, `total_payments` — это пять независимых подзапросов к `marketing.email_statuses_for_actions` (1 340 887 строк, 185 МБ), различающихся только `event_type`.
+
+Индекс `(campaign_id, event_type)` там есть, но проходов всё равно пять вместо одного.
+
+**Что делать.** Одна агрегация с фильтрами вместо пяти подзапросов:
+
+```sql
+select
+  count(*) filter (where event_type = <ok_sent>)          as sent,
+  count(*) filter (where event_type = <ok_delivered>)     as delivered,
+  count(*) filter (where event_type = <ok_read>)          as read,
+  count(distinct action) filter (where event_type = <ok_link_visited>) as visited,
+  count(*) filter (where event_type = <payment_completed>) as payments
+from marketing.email_statuses_for_actions
+where campaign_id = campaigns.unisender_campaign_id
+```
+
+Один проход по индексу вместо пяти. Если FunQL не поддерживает `FILTER`, тот же результат даёт `sum(case when ... then 1 else 0 end)`.
+
+### 3. Счётчики считаются, даже когда скрыты
+
+Все пять колонок обёрнуты в `case when $display_info then (...) else 0 end`. Это правильная идея, но условие внутри выражения — PostgreSQL всё равно строит план для обеих веток, а сами подзапросы остаются в запросе. При `$display_info = false` дешевле было бы не включать колонки вовсе.
+
+---
+
+## Что стоит улучшить в самом OzmaDB
+
+Это уже не про эти две страницы, а про то, что движок мог бы чинить автоматически.
+
+### 1. Устранение общих подвыражений при компиляции
+
+Пять идентичных копий одного скалярного подзапроса в FunQL превращаются в пять копий в SQL. Классический CSE на этапе [Compile.fs](../OzmaDB/src/OzmaQL/Compile.fs): одинаковые по структуре коррелированные подзапросы выносятся в один `LATERAL` и переиспользуются. Это чинило бы такие view без переписывания прикладного кода, а заодно резало бы время планирования.
+
+Работа немаленькая и требует аккуратности с семантикой (подзапрос должен быть детерминированным и не зависеть от контекста), но выигрыш здесь — кратный, а не процентный.
+
+### 2. Отбрасывать колонки с константным `visible = false`
+
+Если атрибут `visible` вычисляется в константу `false` на этапе dry run, колонку можно не включать в SQL вообще. Сейчас `is_added_to_pl_report` с `EXISTS`-подзапросом выполняется на каждую строку, хотя её никто не видит. Для динамических `visible` (зависящих от пользователя) это неприменимо, но константный случай встречается часто.
+
+### 3. `request_lines_number()` по умолчанию отложенный
+
+Сейчас счётчик удваивает стоимость любого табличного view. Флаг `__defer_request_lines_number` уже реализован — стоит сделать его поведением по умолчанию для `@type = 'table'` с пагинацией, а точный подсчёт запрашивать вторым запросом.
+
+### 4. Пуны для невидимых и неиспользуемых колонок
+
+Подстановка отображаемых имён по ссылкам тянет цепочки вычисляемых полей (в кампаниях это 11 тысяч обращений к `contacts` и `communication_ways`). Флаг `__no_puns` есть, но он всё или ничего. Полезнее было бы не вычислять pun для колонок, у которых он не используется ни в отображении, ни в атрибутах.
+
+### 5. Комментарий-префикс мешает кэшу планов
+
+Перед каждым запросом подставляется комментарий вида `-- "fin"."transactions_table_all"`, а при неройтовой роли — ещё и её имя. Текст запроса становится уникальным для каждой пары «view + роль», а `MaxAutoPrepare = 50` ограничивает кэш подготовленных выражений на соединение. При десятках view и нескольких ролях вытеснение неизбежно, и тогда каждый вытесненный запрос снова платит 30–97 мс планирования.
+
+Варианты: перенести идентификацию в `application_name`, либо поднять `MaxAutoPrepare` до величины, покрывающей реальную кардинальность. Проверяется по `pg_prepared_statements` на живом соединении.
+
+---
+
+## Приоритеты
+
+По отношению «эффект / трудозатраты»:
+
+1. **Индекс на `fin.transactions`** — одна команда, убирает Seq Scan и двойную сортировку.
+2. **Отложенный `request_lines_number`** для обеих таблиц — флаг уже есть, экономит около половины времени.
+3. **Слить пять `count()` в кампаниях в одну агрегацию** — правка в одном view, убирает четыре прохода по таблице на 1.3 млн строк.
+4. **Материализовать `total_emails`** — убирает N+1 на 11 тысяч итераций.
+5. **Убрать дубли подзапросов в транзакциях** — сокращает и выполнение, и планирование.
+6. CSE в компиляторе и отбрасывание невидимых колонок — работа по движку, окупается на всех view сразу.
+
+Пункты 1–4 стоит сделать до того, как трогать движок: они дадут больше и стоят несопоставимо дешевле.

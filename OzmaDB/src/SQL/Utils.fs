@@ -216,9 +216,16 @@ let optionToSQLString<'a when 'a :> ISQLString> : 'a option -> string =
     | None -> ""
     | Some o -> o.ToSQLString()
 
+// Query comments name the user view and the role in `pg_stat_activity`, which is handy when
+// debugging a live instance. They also make the query text unique per (view, role), which
+// fragments Npgsql's auto-prepare cache and makes PostgreSQL replan queries that would otherwise
+// share a plan - and planning dominates large user views. Off by default; turn it back on with
+// `ozmaDB.includeQueryComments` when you need to see which view a backend is running.
+let mutable includeQueryComments = false
+
 let convertComments: string option -> string =
     function
-    | None -> ""
-    | Some comments -> sprintf "-- %s\n" (comments.Replace("\n", "\n-- "))
+    | Some comments when includeQueryComments -> sprintf "-- %s\n" (comments.Replace("\n", "\n-- "))
+    | _ -> ""
 
 let snakeCaseName = NpgsqlSnakeCaseNameTranslator.ConvertToSnakeCase

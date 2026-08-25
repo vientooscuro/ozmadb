@@ -221,7 +221,7 @@ type private DatabaseInstances
         member this.SetExtraConnectionOptions(builder: NpgsqlConnectionStringBuilder) =
             builder.CommandTimeout <- 0
             builder.ConnectionIdleLifetime <- 30
-            builder.MaxAutoPrepare <- 50
+            builder.MaxAutoPrepare <- 400
 
 type private StaticInstance
     (instances: Map<string, Instance>, defaultInstance: Instance option, homeRegion: string option) =
@@ -285,7 +285,7 @@ type private StaticInstance
         member this.SetExtraConnectionOptions(builder: NpgsqlConnectionStringBuilder) =
             builder.CommandTimeout <- 0
             builder.ConnectionIdleLifetime <- 30
-            builder.MaxAutoPrepare <- 50
+            builder.MaxAutoPrepare <- 400
             ()
 
 let private appEndpoints (serviceProvider: IServiceProvider) : Endpoint list =
@@ -439,6 +439,10 @@ let private setupResponseCompression (webAppBuilder: WebApplicationBuilder) =
     ignore <| services.AddResponseCompression(configureCompression)
     ignore <| services.Configure<BrotliCompressionProviderOptions>(configureBrotli)
     ignore <| services.Configure<GzipCompressionProviderOptions>(configureGzip)
+
+let private setupQueryComments (webAppBuilder: WebApplicationBuilder) =
+    let ozmadbSection = webAppBuilder.Configuration.GetSection("OzmaDB")
+    OzmaDB.SQL.Utils.includeQueryComments <- ozmadbSection.GetValue("IncludeQueryComments", false)
 
 let private setupJSON (webAppBuilder: WebApplicationBuilder) =
     ignore
@@ -711,6 +715,7 @@ let main (args: string[]) : int =
             let webAppBuilder = WebApplication.CreateBuilder()
             setupConfiguration args webAppBuilder
             setupLogging webAppBuilder
+            setupQueryComments webAppBuilder
             setupAuthentication webAppBuilder
             setupRedis webAppBuilder
             setupRateLimiting webAppBuilder

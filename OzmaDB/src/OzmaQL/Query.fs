@@ -839,64 +839,45 @@ let runViewExpr
                         let baseExpr =
                             Option.defaultValue viewExpr.Query.Expression viewExpr.RequestLinesNumberBaseExpression
 
-                        let rowsQuery = getRequestLinesRowsQuery baseExpr viewExpr.Query.Expression
+                        // Count and rows go as two separate queries rather than one sharing a CTE.
+                        // Sharing forces PostgreSQL to materialize and sort the whole unlimited set
+                        // for both branches, which discards any index that could satisfy
+                        // `ORDER BY ... LIMIT` on the rows query on its own.
+                        let countQuery = getTotalRowsCountQuery baseExpr
 
-                        let requestLinesColumnInfo =
-                            { Type = CTMeta(CMRowAttribute requestLinesRowAttributeName)
-                              Name = requestLinesRowColumnName
-                              Info = emptyColumnMetaInfo }
-                            : CompiledColumnInfo
-
-                        let queryColumns = Array.append [| requestLinesColumnInfo |] viewExpr.Columns
+                        let! totalRows =
+                            task {
+                                match!
+                                    connection.ExecuteRowValuesQuery
+                                        (prefix + countQuery)
+                                        parameters
+                                        cancellationToken
+                                with
+                                | None -> return failwith "Unexpected empty request_lines_number count result"
+                                | Some values ->
+                                    match values |> Array.tryHead with
+                                    | None ->
+                                        return failwith "Unexpected empty request_lines_number count row columns"
+                                    | Some(_, _, value) -> return SQL.parseSmallIntValue value
+                            }
 
                         let! (info, rowsArr) =
-                            connection.ExecuteQuery (prefix + rowsQuery) parameters cancellationToken
+                            connection.ExecuteQuery
+                                (prefix + viewExpr.Query.Expression.ToSQLString())
+                                parameters
+                                cancellationToken
                             <| fun resultColumns rawRows ->
-                                parseResult viewExpr.MainRootEntity viewExpr.Domains queryColumns resultColumns rawRows
+                                parseResult
+                                    viewExpr.MainRootEntity
+                                    viewExpr.Domains
+                                    viewExpr.Columns
+                                    resultColumns
+                                    rawRows
                                 <| fun info rows ->
                                     task {
                                         let! rowsArr = rows.ToArrayAsync(cancellationToken)
                                         return (info, rowsArr)
                                     }
-
-                        let! totalRows =
-                            match rowsArr |> Array.tryHead with
-                            | Some row ->
-                                task {
-                                    return
-                                        row.Attributes
-                                        |> Map.tryFind requestLinesRowAttributeName
-                                        |> Option.map SQL.parseSmallIntValue
-                                        |> Option.defaultValue 0
-                                }
-                            | None ->
-                                task {
-                                    let countQuery = getTotalRowsCountQuery baseExpr
-
-                                    let! countRow =
-                                        connection.ExecuteRowValuesQuery
-                                            (prefix + countQuery)
-                                            parameters
-                                            cancellationToken
-
-                                    match countRow with
-                                    | None -> return failwith "Unexpected empty request_lines_number count result"
-                                    | Some values ->
-                                        match values |> Array.tryHead with
-                                        | None ->
-                                            return failwith "Unexpected empty request_lines_number count row columns"
-                                        | Some(_, _, value) -> return SQL.parseSmallIntValue value
-                                }
-
-                        let info =
-                            { info with
-                                RowAttributeTypes = Map.remove requestLinesRowAttributeName info.RowAttributeTypes }
-
-                        let rowsArr =
-                            rowsArr
-                            |> Array.map (fun row ->
-                                { row with
-                                    Attributes = row.Attributes |> Map.remove requestLinesRowAttributeName })
 
                         let attrsParameters = Map.add placeholderId (SQL.VInt totalRows) parameters
                         let! attrsResult = getAttrsResult attrsParameters
