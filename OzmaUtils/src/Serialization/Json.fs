@@ -32,6 +32,17 @@ let private getJsonSerializableOpts (prop: JsonProperty) =
     { DefaultIgnore = Some prop.Ignored
       DefaultName = Some prop.PropertyName }
 
+// Union tags are contiguous indices, so a lookup by tag can be an array index instead of a
+// Map traversal. This runs once per serialized value, so it shows up on hot paths.
+let private casesByTag (cases: Map<int, 'a>) : 'a[] =
+    let maxTag = cases |> Map.keys |> Seq.fold max -1
+    let arr = Array.zeroCreate (maxTag + 1)
+
+    for KeyValue(tag, case) in cases do
+        arr.[tag] <- case
+
+    arr
+
 type UnionConverter(objectType: Type, resolver: ConverterContractResolver, contract: JsonContract) =
     inherit JsonConverter()
 
@@ -48,6 +59,7 @@ type UnionConverter(objectType: Type, resolver: ConverterContractResolver, contr
                 objInfo.Cases |> Map.values |> Seq.map (fun i -> (i.Name, i)) |> Map.ofSeq
 
             let objectContract = contract :?> JsonObjectContract
+            let objCasesByTag = casesByTag objInfo.Cases
 
             let read =
                 if Map.count casesMap < Map.count objInfo.Cases then
@@ -117,14 +129,14 @@ type UnionConverter(objectType: Type, resolver: ConverterContractResolver, contr
                             match objInfo.ValueCase with
                             | None -> raisef JsonException "Object expected"
                             | Some name ->
-                                let case = objInfo.Cases.[name]
+                                let case = objCasesByTag.[name]
                                 let args = case.Fields |> Array.map (getInnerObject token serializer)
                                 case.ConvertTo args
 
             let write =
                 fun value (writer: JsonWriter) (serializer: JsonSerializer) ->
                     let tag = objInfo.GetTag value
-                    let case = objInfo.Cases.[tag]
+                    let case = objCasesByTag.[tag]
                     let args = case.ConvertFrom(value)
 
                     match case.Type with
@@ -239,6 +251,8 @@ type UnionConverter(objectType: Type, resolver: ConverterContractResolver, contr
                         let optionsMap =
                             options.Cases |> Map.mapWithKeys (fun tag case -> (case.Name, case.Value))
 
+                        let optionsByTag = casesByTag options.Cases
+
                         let read =
                             fun (reader: JsonReader) (serializer: JsonSerializer) ->
                                 let name = serializer.Deserialize<string>(reader)
@@ -250,7 +264,7 @@ type UnionConverter(objectType: Type, resolver: ConverterContractResolver, contr
                         let write =
                             fun value (writer: JsonWriter) (serializer: JsonSerializer) ->
                                 let tag = options.GetTag value
-                                let case = Map.find tag options.Cases
+                                let case = optionsByTag.[tag]
 
                                 match case.Name with
                                 | None -> writer.WriteNull()
@@ -378,10 +392,21 @@ and ConverterContractResolver(converterConstructors: (Type -> JsonConverter opti
                         prop.DefaultValueHandling.GetValueOrDefault(DefaultValueHandling.Populate)
                         &&& DefaultValueHandling.Ignore = DefaultValueHandling.Ignore
                     then
+                        // Hoisted out of the closure: this runs once per field per serialized object.
+                        let getValue = fieldInfo.GetValue
+                        let defaultValue = prop.DefaultValue
+
                         prop.ShouldSerialize <-
                             fun obj ->
-                                let value = fieldInfo.GetValue(obj)
-                                value <> prop.DefaultValue
+                                let value = getValue obj
+                                // Cheap paths first; fall back to F# structural equality, whose
+                                // semantics differ from Object.Equals for arrays and F# containers.
+                                if isNull value then
+                                    not (isNull defaultValue)
+                                elif Object.ReferenceEquals(value, defaultValue) then
+                                    false
+                                else
+                                    value <> defaultValue
 
         prop
 

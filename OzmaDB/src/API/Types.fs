@@ -133,6 +133,9 @@ type IContext =
     abstract member SetAPI: IOzmaDBAPI -> unit
     abstract member FindAction: ActionRef -> Result<ActionScript, exn> option
     abstract member FindTrigger: TriggerRef -> PreparedTrigger option
+    // Apply a role's permissions to a compiled user view, reusing a previously computed result
+    // when the same view has already been restricted for the same role.
+    abstract member GetRoleView: CompiledViewExpr -> ResolvedRoleRef -> ResolvedRole -> CompiledViewExpr
 
 [<NoEquality; NoComparison>]
 type RoleInfo =

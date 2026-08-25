@@ -4,6 +4,9 @@ open FSharpPlus
 open System
 open System.Reflection
 open System.Data
+open System.Diagnostics
+open System.Collections.Concurrent
+open System.Runtime.CompilerServices
 open System.IO
 open System.Linq
 open Microsoft.EntityFrameworkCore
@@ -26,6 +29,8 @@ open OzmaDB.Layout.Resolve
 open OzmaDB.OzmaQL.AST
 open OzmaDB.OzmaQL.Compile
 open OzmaDB.Permissions.Types
+open OzmaDB.Permissions.Apply
+open OzmaDB.Permissions.View
 open OzmaDB.Permissions.Schema
 open OzmaDB.Permissions.Resolve
 open OzmaDB.Attributes.Schema
@@ -98,6 +103,13 @@ type private AnonymousCommand =
 
 let private databaseField = "DatabaseVersion"
 let private versionField = "StateVersion"
+// Capacity of the anonymous user view / command caches.
+let private anonymousCacheCapacity = 1024
+
+// How long we trust a previously read state version before checking the database again.
+// Verifying it costs a separate transaction and a round trip on every single request, while
+// migrations are rare and `GetCache` already tolerates racing with them.
+let private versionCheckInterval = TimeSpan.FromMilliseconds 500.0
 let private fallbackVersion = 0
 let private migrationLockNumber = 0
 let private migrationLockParams = Map.singleton 0 (SQL.VInt migrationLockNumber)
@@ -125,6 +137,13 @@ type private CachedContext =
 type private CachedState =
     { Version: int; Context: CachedContext }
 
+// Memoized role-restricted views for one compiled user view, tied to the layout they were
+// computed against.
+type private RoleViewEntry(layout: Layout) =
+    let views = ConcurrentDictionary<ResolvedRoleRef, CompiledViewExpr>()
+    member this.Layout = layout
+    member this.Views = views
+
 let instanceIsInitialized (conn: DatabaseTransaction) =
     task {
         use pg = createPgCatalogContext conn
@@ -151,13 +170,15 @@ type ContextCacheParams =
 type ContextCacheStore(cacheParams: ContextCacheParams) =
     let preload = cacheParams.Preload.Preload
     let logger = cacheParams.LoggerFactory.CreateLogger<ContextCacheStore>()
-    // FIXME: random values. Also we want to move these somewhere else, too much logic in this class.
+    // A miss here means recompiling the query from scratch, which is by far the most
+    // expensive thing we can do per request, so keep the cache generous.
+    // FIXME: move these to configuration, too much logic in this class.
     let anonymousViewsCache =
         FluidCache<AnonymousUserView>(
-            64,
+            anonymousCacheCapacity,
             TimeSpan.FromSeconds(0.0),
             TimeSpan.FromSeconds(600.0),
-            fun () -> DateTime.Now
+            fun () -> DateTime.UtcNow
         )
 
     let anonymousViewsIndex =
@@ -165,14 +186,41 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
 
     let anonymousCommandsCache =
         FluidCache<AnonymousCommand>(
-            64,
+            anonymousCacheCapacity,
             TimeSpan.FromSeconds(0.0),
             TimeSpan.FromSeconds(600.0),
-            fun () -> DateTime.Now
+            fun () -> DateTime.UtcNow
         )
 
     let anonymousCommandsIndex =
         anonymousCommandsCache.AddIndex("byQuery", (fun uv -> uv.Query))
+
+    // Restricting a compiled view to a role rewrites the whole query AST and is pure in
+    // (view, layout, role), yet it used to run on every single request. Key the memo on the
+    // identity of the compiled view object; those are rebuilt whenever the cached state changes.
+    // The layout is stored alongside and compared by reference as a belt-and-braces check, so a
+    // view that somehow outlived its layout can never be served with stale permissions.
+    // The table holds its keys weakly: entries die together with the views they belong to.
+    let roleViewsCache =
+        ConditionalWeakTable<CompiledViewExpr, RoleViewEntry>()
+
+    let getRoleView (layout: Layout) (compiled: CompiledViewExpr) (roleRef: ResolvedRoleRef) (role: ResolvedRole) =
+        let entry = roleViewsCache.GetValue(compiled, fun _ -> RoleViewEntry(layout))
+
+        if not <| obj.ReferenceEquals(entry.Layout, layout) then
+            // Should not happen, but never serve a view restricted against a different layout.
+            let appliedDb = applyPermissions layout role compiled.UsedDatabase
+            applyRoleViewExpr layout appliedDb compiled
+        else
+            match entry.Views.TryGetValue roleRef with
+            | (true, applied) -> applied
+            | (false, _) ->
+                // Deliberately not memoizing failures: applying permissions raises when access is
+                // denied, and that check has to run again on the next request.
+                let appliedDb = applyPermissions layout role compiled.UsedDatabase
+                let applied = applyRoleViewExpr layout appliedDb compiled
+                entry.Views.[roleRef] <- applied
+                applied
 
     let clearCaches () =
         anonymousViewsCache.Clear()
@@ -886,6 +934,17 @@ for insert into
         }
 
     let mutable cachedState: CachedState option = None
+    // Stopwatch timestamp of the last time the state version was actually read from the database.
+    let mutable lastVersionCheck = 0L
+
+    let openConnection (cancellationToken: CancellationToken) : Task<DatabaseConnection> =
+        task {
+            let connection =
+                new DatabaseConnection(cacheParams.LoggerFactory, cacheParams.ConnectionString)
+
+            do! connection.OpenAsync cancellationToken
+            return connection
+        }
     // Used to detect simultaneous migrations.
     let cachedStateLock = new SemaphoreSlim 1
 
@@ -913,6 +972,16 @@ for insert into
         }
 
     let rec getCachedState (cancellationToken: CancellationToken) : Task<DatabaseConnection * CachedState> =
+        task {
+            match cachedState with
+            | Some oldState when Stopwatch.GetElapsedTime lastVersionCheck < versionCheckInterval ->
+                // The version was checked recently enough; skip the extra transaction entirely.
+                let! connection = openConnection cancellationToken
+                return (connection, oldState)
+            | _ -> return! getCachedStateChecked cancellationToken
+        }
+
+    and getCachedStateChecked (cancellationToken: CancellationToken) : Task<DatabaseConnection * CachedState> =
         task {
             let! (transaction, ret) = openAndGetCurrentVersion cancellationToken
 
@@ -952,6 +1021,7 @@ for insert into
 
                     return! getCachedState cancellationToken
                 else
+                    lastVersionCheck <- Stopwatch.GetTimestamp()
                     do! (transaction :> IAsyncDisposable).DisposeAsync()
                     return (transaction.Connection, oldState)
             | (_, None)
@@ -1359,7 +1429,9 @@ for insert into
                                     .AsQueryable()
                                     .Where(fun x -> x.Name = versionField)
                                     .ExecuteUpdateAsync(
-                                        (fun x -> x.SetProperty((fun x -> x.Value), (fun x -> string newVersion))),
+                                        (fun setters ->
+                                            ignore
+                                            <| setters.SetProperty((fun x -> x.Value), string newVersion)),
                                         cancellationToken
                                     )
 
@@ -1629,6 +1701,9 @@ for insert into
 
                         member this.CheckIntegrity() = checkIntegrity ()
                         member this.GetAnonymousView isPrivileged query = getAnonymousView isPrivileged query
+
+                        member this.GetRoleView compiled roleRef role =
+                            getRoleView oldState.Context.Layout compiled roleRef role
                         member this.GetAnonymousCommand isPrivileged query = getAnonymousCommand isPrivileged query
 
                         member this.ResolveAnonymousView isPrivileged homeSchema query =

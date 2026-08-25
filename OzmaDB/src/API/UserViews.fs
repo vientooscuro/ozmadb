@@ -46,6 +46,24 @@ let private userViewComments
 
     String.concat "" [ sourceStr; roleStr ]
 
+// Same semantics as `getReadRole`, but keeps the role reference around so that the restricted
+// view can be memoized per role.
+let private getReadRoleWithRef =
+    function
+    | RTRoot -> None
+    | RTRole role when role.CanRead -> None
+    | RTRole role -> role.Role |> Option.map (fun r -> (role.Ref, r))
+
+// Restricting a view to a role rewrites the whole query AST, so go through the context cache
+// whenever we have a role reference to key it on.
+let private applyReadRole (ctx: IContext) (roleType: RoleType) (compiled: CompiledViewExpr) =
+    match getReadRoleWithRef roleType with
+    | None -> compiled
+    | Some(Some roleRef, role) -> ctx.GetRoleView compiled roleRef role
+    | Some(None, role) ->
+        let appliedDb = applyPermissions ctx.Layout role compiled.UsedDatabase
+        applyRoleViewExpr ctx.Layout appliedDb compiled
+
 let private removeColumnAttributes (col: UserViewColumn) =
     { col with
         AttributeTypes = Map.empty
@@ -181,11 +199,7 @@ type UserViewsAPI(api: IOzmaDBAPI) =
                     | Ok uv ->
                         try
                             let compiled =
-                                match getReadRole rctx.User.Effective.Type with
-                                | None -> uv.UserView.Compiled
-                                | Some role ->
-                                    let appliedDb = applyPermissions ctx.Layout role uv.UserView.Compiled.UsedDatabase
-                                    applyRoleViewExpr ctx.Layout appliedDb uv.UserView.Compiled
+                                applyReadRole ctx rctx.User.Effective.Type uv.UserView.Compiled
 
                             let chunk = Option.defaultValue emptySourceQueryChunk req.Chunk
                             let resolvedChunk = resolveViewExprChunk ctx.Layout compiled chunk
@@ -254,11 +268,7 @@ type UserViewsAPI(api: IOzmaDBAPI) =
                 | Ok uv ->
                     try
                         let compiled =
-                            match getReadRole rctx.User.Effective.Type with
-                            | None -> uv.UserView.Compiled
-                            | Some role ->
-                                let appliedDb = applyPermissions ctx.Layout role uv.UserView.Compiled.UsedDatabase
-                                applyRoleViewExpr ctx.Layout appliedDb uv.UserView.Compiled
+                            applyReadRole ctx rctx.User.Effective.Type uv.UserView.Compiled
 
                         let chunk = Option.defaultValue emptySourceQueryChunk req.Chunk
                         let resolvedChunk = resolveViewExprChunk ctx.Layout compiled chunk

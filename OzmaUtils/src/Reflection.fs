@@ -3,6 +3,7 @@ module OzmaDB.OzmaUtils.Reflection
 open System
 open System.Globalization
 open System.Reflection
+open System.Linq.Expressions
 open System.ComponentModel
 open Microsoft.FSharp.Reflection
 
@@ -73,11 +74,37 @@ let memberInnerType (memberInfo: MemberInfo) =
     | :? FieldInfo as info -> Some info.FieldType
     | _ -> None
 
+// Reflective `GetValue` shows up in serialization hot paths, where it runs once per field per
+// object. Compiling an accessor once per member turns that into a plain delegate call.
+let private compileMemberAccess (declaringType: Type) (isStatic: bool) (access: Expression -> MemberExpression) =
+    let param = Expression.Parameter(typeof<obj>, "o")
+
+    let instance: Expression =
+        if isStatic then null else upcast Expression.Convert(param, declaringType)
+
+    let body = Expression.Convert(access instance, typeof<obj>)
+    let func = Expression.Lambda<Func<obj, obj>>(body, param).Compile()
+    fun (o: obj) -> func.Invoke o
+
 let getMemberValue (memberInfo: MemberInfo) : (obj -> obj) option =
-    match memberInfo with
-    | :? PropertyInfo as info -> Some info.GetValue
-    | :? FieldInfo as info -> Some info.GetValue
-    | _ -> None
+    try
+        match memberInfo with
+        | :? PropertyInfo as info when not (isNull info.GetMethod) && info.GetIndexParameters().Length = 0 ->
+            let isStatic = info.GetMethod.IsStatic
+
+            Some
+            <| compileMemberAccess info.DeclaringType isStatic (fun instance -> Expression.Property(instance, info))
+        | :? PropertyInfo as info -> Some info.GetValue
+        | :? FieldInfo as info ->
+            Some
+            <| compileMemberAccess info.DeclaringType info.IsStatic (fun instance -> Expression.Field(instance, info))
+        | _ -> None
+    with _ ->
+        // Fall back to plain reflection if the member can't be expressed as a lambda.
+        match memberInfo with
+        | :? PropertyInfo as info -> Some info.GetValue
+        | :? FieldInfo as info -> Some info.GetValue
+        | _ -> None
 
 let unionCases (objectType: Type) : UnionCase[] =
     let cases = FSharpType.GetUnionCases(objectType)
