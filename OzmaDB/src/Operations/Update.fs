@@ -4,6 +4,7 @@ open System
 open Npgsql
 open System.Reflection
 open System.Linq
+open System.Linq.Expressions
 open System.Threading
 open System.Threading.Tasks
 open Microsoft.EntityFrameworkCore
@@ -294,22 +295,17 @@ let genericMarkBroken
             let check =
                 errors |> Seq.fold1 (fun a b -> <@ fun field -> (%a) field || (%b) field @>)
 
-            let entityVar = Var("entity", typeof<'a>)
             let allowBroken = typeof<'a>.GetProperty("AllowBroken")
+            let entityParam = Expression.Parameter(typeof<'a>, "entity")
 
             let getAllowBroken =
-                Expr.NewDelegate(
-                    typeof<Func<'a, bool>>,
-                    [ entityVar ],
-                    Expr.PropertyGet(Expr.Var(entityVar), allowBroken)
-                )
-                |> Expr.Cast<Func<'a, bool>>
+                Expression.Lambda<Func<'a, bool>>(Expression.Property(entityParam, allowBroken), entityParam)
 
             let! _ =
                 queryable
                     .Where(Expr.toExpressionFunc check)
                     .ExecuteUpdateAsync(
-                        (fun row -> row.SetProperty(%getAllowBroken, (fun row -> true))),
+                        (fun setters -> ignore <| setters.SetProperty(getAllowBroken, true)),
                         cancellationToken
                     )
 

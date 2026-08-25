@@ -3,6 +3,7 @@ module OzmaDB.SQL.Query
 open System
 open System.Linq
 open System.Collections.Generic
+open System.Collections.Concurrent
 open System.Threading
 open System.Threading.Tasks
 open System.Runtime.Serialization
@@ -45,7 +46,7 @@ let (|IsConcurrentUpdateException|_|) (e: exn) = getConcurrentUpdateException e
 
 type ExprParameters = Map<int, Value>
 
-let private parseType typeStr =
+let private parseTypeUncached typeStr =
     match parse tokenizeSQL valueType typeStr with
     | Ok valType ->
         let coerceType typeName =
@@ -55,6 +56,19 @@ let private parseType typeStr =
 
         mapValueType coerceType valType
     | Error msg -> raisef QueryException "Cannot parse database type: %s" msg
+
+// Parsing a type name runs the full SQL lexer and parser, but the set of names
+// PostgreSQL reports back is tiny and fixed, so memoize it.
+let private parsedTypes = ConcurrentDictionary<string, SimpleValueType>()
+
+let private parseType (typeStr: string) : SimpleValueType =
+    match parsedTypes.TryGetValue typeStr with
+    | (true, typ) -> typ
+    | (false, _) ->
+        // Not using GetOrAdd because the factory may raise, and we don't want to cache failures.
+        let typ = parseTypeUncached typeStr
+        parsedTypes.[typeStr] <- typ
+        typ
 
 let private convertInt: obj -> int option =
     function
@@ -196,7 +210,8 @@ type QueryConnection(loggerFactory: ILoggerFactory, connection: NpgsqlConnection
                 | (None, obj) -> ignore <| command.Parameters.AddWithValue(name.ToString(), obj)
                 | (Some typ, obj) -> ignore <| command.Parameters.AddWithValue(name.ToString(), typ, obj)
 
-            logger.LogDebug("Executing query with args {args}: {query}", pars, queryStr)
+            if logger.IsEnabled(LogLevel.Debug) then
+                logger.LogDebug("Executing query with args {args}: {query}", pars, queryStr)
 
             try
                 return! runFunc command
@@ -258,10 +273,15 @@ type QueryConnection(loggerFactory: ILoggerFactory, connection: NpgsqlConnection
                 if not hasRow0 then
                     return None
                 else
+                    // Names and types are the same for every row, so resolve them once.
+                    let columns =
+                        Array.init reader.FieldCount (fun i ->
+                            (SQLName <| reader.GetName(i), parseType (reader.GetDataTypeName(i))))
+
                     let getValue i =
+                        let (name, typ) = columns.[i]
+
                         try
-                            let name = SQLName <| reader.GetName(i)
-                            let typ = parseType (reader.GetDataTypeName(i))
                             let rawValue = reader.GetProviderSpecificValue(i)
                             let value = convertValue typ rawValue
                             (name, typ, value)

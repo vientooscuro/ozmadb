@@ -226,10 +226,15 @@ type HttpJobResponse = HttpJobResponseHeader * JobDataWriter
 
 let private utf8EncodingWithoutBom = UTF8Encoding(false)
 
+// Responses are frequently large (thousands of rows), and the default `StreamWriter` buffer is
+// 1 KiB, which means a lot of small writes into the compression and socket streams below us.
+let private responseBufferSize = 32768
+
 // Convert that to async when we move to System.Text.Json
 let jsonJobDataWriter (response: 'a) : JobDataWriter =
     let writer (stream: Stream) (cancellationToken: CancellationToken) =
-        use streamWriter = new StreamWriter(stream, utf8EncodingWithoutBom, -1, true)
+        use streamWriter =
+            new StreamWriter(stream, utf8EncodingWithoutBom, responseBufferSize, true)
         use jsonTextWriter = new JsonTextWriter(streamWriter)
         let jsonSerializer = JsonSerializer.CreateDefault()
         jsonSerializer.Serialize(jsonTextWriter, response)

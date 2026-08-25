@@ -136,10 +136,11 @@ type private DatabaseInstances
                                         $"""SELECT * FROM "instances" WHERE "id" = {instance.Id} AND ("accessed_at" IS NULL OR "accessed_at" < {newTime})"""
                                     )
                                     .ExecuteUpdateAsync(
-                                        (fun inst ->
-                                            inst.SetProperty(
+                                        (fun setters ->
+                                            ignore
+                                            <| setters.SetProperty(
                                                 (fun inst -> inst.AccessedAt),
-                                                (fun inst -> Nullable(newTime))
+                                                Nullable(newTime)
                                             )),
                                         lifetime.ApplicationStopping
                                     )

@@ -572,8 +572,13 @@ let private parseResult
                 | None -> Map.empty
                 | Some a -> a
 
-            let punType =
-                Option.map (fun (valType, i) -> valType) <| Map.tryFind name punAttributes
+            let maybePun = Map.tryFind name punAttributes
+            let punType = Option.map (fun (valType, i) -> valType) maybePun
+
+            let punIndex =
+                match maybePun with
+                | Some(_, punI) -> ValueSome punI
+                | None -> ValueNone
 
             let columnInfo =
                 { Name = name
@@ -582,23 +587,28 @@ let private parseResult
                   ValueType = valType
                   PunType = punType }
 
-            Some(cellAttributes, i, columnInfo)
+            Some(cellAttributes, i, punIndex, columnInfo)
         | m_ -> None
 
     let columnsMeta = Seq.mapi2Maybe takeColumn columns resultColumns |> Seq.toArray
 
     let parseRow (values: SQL.Value[]) =
-        let getCell (cellAttributes, i, column) =
+        let getCell (cellAttributes, i, punIndex, column) =
             let value = values.[i]
-            let attrs = Map.map (fun name (valType, i) -> values.[i]) cellAttributes
+
+            let attrs =
+                if Map.isEmpty cellAttributes then
+                    Map.empty
+                else
+                    Map.map (fun name (valType, i) -> values.[i]) cellAttributes
 
             let pun =
                 match value with
                 | SQL.VNull -> None
                 | _ ->
-                    match Map.tryFind column.Name punAttributes with
-                    | Some(valType, i) -> Some values.[i]
-                    | None -> None
+                    match punIndex with
+                    | ValueSome punI -> Some values.[punI]
+                    | ValueNone -> None
 
             { Attributes = attrs
               Value = value
@@ -626,7 +636,10 @@ let private parseResult
             | SQL.VString subEntityString -> parseTypeName (Option.get mainRootEntity) subEntityString
             | _ -> failwith "Main subentity is not a string"
 
-        let domainIds = Map.mapMaybe (fun ns i -> getDomainId i) domainColumns
+        let domainIds =
+            match domains with
+            | DSingle _ -> Map.empty
+            | DMulti _ -> Map.mapMaybe (fun ns i -> getDomainId i) domainColumns
 
         let rec getGlobalDomainId =
             function
@@ -670,7 +683,11 @@ let private parseResult
         let entityIds =
             Option.map (snd >> getEntityIds) domainId |> Option.defaultValue Map.empty
 
-        let rowAttrs = Map.map (fun name (valType, i) -> values.[i]) rowAttributes
+        let rowAttrs =
+            if Map.isEmpty rowAttributes then
+                Map.empty
+            else
+                Map.map (fun name (valType, i) -> values.[i]) rowAttributes
         let values = Array.map getCell columnsMeta
         let mainId = Option.map getMainId mainIdColumn
         let mainSubEntity = Option.map getMainSubEntity mainSubEntityColumn
@@ -682,7 +699,7 @@ let private parseResult
           MainId = mainId
           MainSubEntity = mainSubEntity }
 
-    let columns = Array.map (fun (attributes, i, column) -> column) columnsMeta
+    let columns = Array.map (fun (attributes, i, punIndex, column) -> column) columnsMeta
 
     let info: ExecutedViewInfo =
         { Columns = columns
