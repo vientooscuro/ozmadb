@@ -198,8 +198,7 @@ type UserViewsAPI(api: IOzmaDBAPI) =
                     | Error e -> return Error e
                     | Ok uv ->
                         try
-                            let compiled =
-                                applyReadRole ctx rctx.User.Effective.Type uv.UserView.Compiled
+                            let compiled = applyReadRole ctx rctx.User.Effective.Type uv.UserView.Compiled
 
                             let chunk = Option.defaultValue emptySourceQueryChunk req.Chunk
                             let resolvedChunk = resolveViewExprChunk ctx.Layout compiled chunk
@@ -267,8 +266,7 @@ type UserViewsAPI(api: IOzmaDBAPI) =
                 | Error e -> return Error e
                 | Ok uv ->
                     try
-                        let compiled =
-                            applyReadRole ctx rctx.User.Effective.Type uv.UserView.Compiled
+                        let compiled = applyReadRole ctx rctx.User.Effective.Type uv.UserView.Compiled
 
                         let chunk = Option.defaultValue emptySourceQueryChunk req.Chunk
                         let resolvedChunk = resolveViewExprChunk ctx.Layout compiled chunk

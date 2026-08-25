@@ -201,11 +201,10 @@ type ContextCacheStore(cacheParams: ContextCacheParams) =
     // The layout is stored alongside and compared by reference as a belt-and-braces check, so a
     // view that somehow outlived its layout can never be served with stale permissions.
     // The table holds its keys weakly: entries die together with the views they belong to.
-    let roleViewsCache =
-        ConditionalWeakTable<CompiledViewExpr, RoleViewEntry>()
+    let roleViewsCache = ConditionalWeakTable<CompiledViewExpr, RoleViewEntry>()
 
     let getRoleView (layout: Layout) (compiled: CompiledViewExpr) (roleRef: ResolvedRoleRef) (role: ResolvedRole) =
-        let entry = roleViewsCache.GetValue(compiled, fun _ -> RoleViewEntry(layout))
+        let entry = roleViewsCache.GetValue(compiled, (fun _ -> RoleViewEntry(layout)))
 
         if not <| obj.ReferenceEquals(entry.Layout, layout) then
             // Should not happen, but never serve a view restricted against a different layout.
@@ -1430,8 +1429,7 @@ for insert into
                                     .Where(fun x -> x.Name = versionField)
                                     .ExecuteUpdateAsync(
                                         (fun setters ->
-                                            ignore
-                                            <| setters.SetProperty((fun x -> x.Value), string newVersion)),
+                                            ignore <| setters.SetProperty((fun x -> x.Value), string newVersion)),
                                         cancellationToken
                                     )
 
@@ -1704,6 +1702,7 @@ for insert into
 
                         member this.GetRoleView compiled roleRef role =
                             getRoleView oldState.Context.Layout compiled roleRef role
+
                         member this.GetAnonymousCommand isPrivileged query = getAnonymousCommand isPrivileged query
 
                         member this.ResolveAnonymousView isPrivileged homeSchema query =

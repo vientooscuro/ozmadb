@@ -235,6 +235,7 @@ let jsonJobDataWriter (response: 'a) : JobDataWriter =
     let writer (stream: Stream) (cancellationToken: CancellationToken) =
         use streamWriter =
             new StreamWriter(stream, utf8EncodingWithoutBom, responseBufferSize, true)
+
         use jsonTextWriter = new JsonTextWriter(streamWriter)
         let jsonSerializer = JsonSerializer.CreateDefault()
         jsonSerializer.Serialize(jsonTextWriter, response)

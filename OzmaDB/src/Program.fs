@@ -138,10 +138,7 @@ type private DatabaseInstances
                                     .ExecuteUpdateAsync(
                                         (fun setters ->
                                             ignore
-                                            <| setters.SetProperty(
-                                                (fun inst -> inst.AccessedAt),
-                                                Nullable(newTime)
-                                            )),
+                                            <| setters.SetProperty((fun inst -> inst.AccessedAt), Nullable(newTime))),
                                         lifetime.ApplicationStopping
                                     )
 

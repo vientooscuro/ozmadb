@@ -80,7 +80,10 @@ let private compileMemberAccess (declaringType: Type) (isStatic: bool) (access: 
     let param = Expression.Parameter(typeof<obj>, "o")
 
     let instance: Expression =
-        if isStatic then null else upcast Expression.Convert(param, declaringType)
+        if isStatic then
+            null
+        else
+            upcast Expression.Convert(param, declaringType)
 
     let body = Expression.Convert(access instance, typeof<obj>)
     let func = Expression.Lambda<Func<obj, obj>>(body, param).Compile()

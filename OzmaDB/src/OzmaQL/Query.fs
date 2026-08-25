@@ -688,6 +688,7 @@ let private parseResult
                 Map.empty
             else
                 Map.map (fun name (valType, i) -> values.[i]) rowAttributes
+
         let values = Array.map getCell columnsMeta
         let mainId = Option.map getMainId mainIdColumn
         let mainSubEntity = Option.map getMainSubEntity mainSubEntityColumn
@@ -699,7 +700,8 @@ let private parseResult
           MainId = mainId
           MainSubEntity = mainSubEntity }
 
-    let columns = Array.map (fun (attributes, i, punIndex, column) -> column) columnsMeta
+    let columns =
+        Array.map (fun (attributes, i, punIndex, column) -> column) columnsMeta
 
     let info: ExecutedViewInfo =
         { Columns = columns
@@ -848,16 +850,12 @@ let runViewExpr
                         let! totalRows =
                             task {
                                 match!
-                                    connection.ExecuteRowValuesQuery
-                                        (prefix + countQuery)
-                                        parameters
-                                        cancellationToken
+                                    connection.ExecuteRowValuesQuery (prefix + countQuery) parameters cancellationToken
                                 with
                                 | None -> return failwith "Unexpected empty request_lines_number count result"
                                 | Some values ->
                                     match values |> Array.tryHead with
-                                    | None ->
-                                        return failwith "Unexpected empty request_lines_number count row columns"
+                                    | None -> return failwith "Unexpected empty request_lines_number count row columns"
                                     | Some(_, _, value) -> return SQL.parseSmallIntValue value
                             }
 

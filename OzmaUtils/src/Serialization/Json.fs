@@ -401,12 +401,9 @@ and ConverterContractResolver(converterConstructors: (Type -> JsonConverter opti
                                 let value = getValue obj
                                 // Cheap paths first; fall back to F# structural equality, whose
                                 // semantics differ from Object.Equals for arrays and F# containers.
-                                if isNull value then
-                                    not (isNull defaultValue)
-                                elif Object.ReferenceEquals(value, defaultValue) then
-                                    false
-                                else
-                                    value <> defaultValue
+                                if isNull value then not (isNull defaultValue)
+                                elif Object.ReferenceEquals(value, defaultValue) then false
+                                else value <> defaultValue
 
         prop
 
