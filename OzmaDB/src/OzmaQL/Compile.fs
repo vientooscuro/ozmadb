@@ -139,6 +139,51 @@ let private columnSQLType: GenericColumnType<'a> -> SQL.SimpleValueType option =
 let private compileSQLColumnType (typ: SQL.SimpleValueType) =
     typ |> SQL.mapValueType (fun x -> x.ToSQLRawString())
 
+// Best-effort type of an already compiled expression. Set operations pad the branches
+// that lack a meta column with NULL, and PostgreSQL types a group of branches that are
+// all NULL for a column as `text` — which then refuses to match the concrete type the
+// remaining branches produce. Knowing the type here lets us pad with a typed NULL.
+let rec private tryValueExprType: SQL.ValueExpr -> SQL.SimpleValueType option =
+    function
+    | SQL.VECast(_, typ) -> SQL.findSimpleValueType typ
+    | SQL.VEValue value -> tryValueType value
+    | SQL.VECase(cases, els) ->
+        let fromCases = cases |> Seq.tryPick (fun (_, result) -> tryValueExprType result)
+
+        match fromCases with
+        | Some typ -> Some typ
+        | None -> Option.bind tryValueExprType els
+    | _ -> None
+
+and private tryValueType: SQL.Value -> SQL.SimpleValueType option =
+    function
+    | SQL.VInt _ -> Some(SQL.VTScalar SQL.STInt)
+    | SQL.VBigInt _ -> Some(SQL.VTScalar SQL.STBigInt)
+    | SQL.VDecimal _ -> Some(SQL.VTScalar SQL.STDecimal)
+    | SQL.VString _ -> Some(SQL.VTScalar SQL.STString)
+    | SQL.VBool _ -> Some(SQL.VTScalar SQL.STBool)
+    | SQL.VDateTime _ -> Some(SQL.VTScalar SQL.STDateTime)
+    | SQL.VLocalDateTime _ -> Some(SQL.VTScalar SQL.STLocalDateTime)
+    | SQL.VDate _ -> Some(SQL.VTScalar SQL.STDate)
+    | SQL.VInterval _ -> Some(SQL.VTScalar SQL.STInterval)
+    | SQL.VRegclass _ -> Some(SQL.VTScalar SQL.STRegclass)
+    | SQL.VJson _ -> Some(SQL.VTScalar SQL.STJson)
+    | SQL.VUuid _ -> Some(SQL.VTScalar SQL.STUuid)
+    | SQL.VIntArray _ -> Some(SQL.VTArray SQL.STInt)
+    | SQL.VBigIntArray _ -> Some(SQL.VTArray SQL.STBigInt)
+    | SQL.VDecimalArray _ -> Some(SQL.VTArray SQL.STDecimal)
+    | SQL.VStringArray _ -> Some(SQL.VTArray SQL.STString)
+    | SQL.VBoolArray _ -> Some(SQL.VTArray SQL.STBool)
+    | SQL.VDateTimeArray _ -> Some(SQL.VTArray SQL.STDateTime)
+    | SQL.VLocalDateTimeArray _ -> Some(SQL.VTArray SQL.STLocalDateTime)
+    | SQL.VDateArray _ -> Some(SQL.VTArray SQL.STDate)
+    | SQL.VIntervalArray _ -> Some(SQL.VTArray SQL.STInterval)
+    | SQL.VRegclassArray _ -> Some(SQL.VTArray SQL.STRegclass)
+    | SQL.VJsonArray _ -> Some(SQL.VTArray SQL.STJson)
+    | SQL.VUuidArray _ -> Some(SQL.VTArray SQL.STUuid)
+    | SQL.VNull
+    | SQL.VInvalid -> None
+
 type ColumnType = GenericColumnType<FieldName>
 
 type private NameReplacer() =
@@ -204,7 +249,9 @@ type private ResultMetaColumn =
 
 let private resultMetaColumn (expr: SQL.ValueExpr) : ResultMetaColumn =
     { Expression = expr
-      Info = emptyColumnMetaInfo }
+      Info =
+        { emptyColumnMetaInfo with
+            ValueType = tryValueExprType expr } }
 
 let private viewReferenceAttributeName = OzmaQLName "view_reference"
 let private linkAttributeName = OzmaQLName "link"
@@ -715,6 +762,20 @@ let private mergeSelectSignature
     : Map<TempFieldName, TempFieldName> * SelectSignature =
     let mutable renames = Map.empty
 
+    // Nothing inside a set operation can be hoisted out of the per-row query, because a
+    // branch may have no value for it at all. Resetting only the columns present in both
+    // signatures left the single-branch ones still marked as hoistable, and
+    // `filterSelectColumns` then dropped a different number of columns from each branch.
+    // The type is worth carrying over though: it is what lets us pad the branches that
+    // lack the column with a typed NULL instead of an untyped one.
+    let mergeMetaInfo (a: ColumnMetaInfo) (b: ColumnMetaInfo) =
+        { emptyColumnMetaInfo with
+            ValueType = Option.orElse b.ValueType a.ValueType }
+
+    let mergeMeta (a: Map<'k, ColumnMetaInfo>) (b: Map<'k, ColumnMetaInfo>) =
+        let merged = Map.unionWith mergeMetaInfo a b
+        Map.map (fun _ info -> mergeMetaInfo info emptyColumnMetaInfo) merged
+
     let mergeOne (a: SelectColumnSignature) (b: SelectColumnSignature) =
         let newName = unionTempName a.Name b.Name
 
@@ -724,10 +785,10 @@ let private mergeSelectSignature
             renames <- Map.add b.Name newName renames
 
         { Name = newName
-          Meta = Map.unionWith (fun _ _ -> emptyColumnMetaInfo) a.Meta b.Meta }
+          Meta = mergeMeta a.Meta b.Meta }
 
     let ret =
-        { MetaColumns = Map.unionWith (fun _ _ -> emptyColumnMetaInfo) a.MetaColumns b.MetaColumns
+        { MetaColumns = mergeMeta a.MetaColumns b.MetaColumns
           Columns = Array.map2 mergeOne a.Columns b.Columns }
 
     (renames, ret)
@@ -1200,12 +1261,14 @@ type private QueryCompiler
                 let expr =
                     match Map.tryFind metaCol half.MetaColumns with
                     | Some e -> e.Expression
-                    | None when skipNames -> SQL.nullExpr
                     | None ->
-                        match metaSQLType metaCol with
+                        // An untyped NULL here makes PostgreSQL assume `text` whenever a
+                        // whole group of set operation branches lacks the column, which
+                        // then clashes with the type the other branches produce. Use the
+                        // declared type of the meta column, or the one we recorded from
+                        // whichever branch does have it.
+                        match Option.orElse metaInfo.ValueType (metaSQLType metaCol) with
                         | Some typ -> SQL.VECast(SQL.nullExpr, compileSQLColumnType typ)
-                        // This will break when current query is a recursive one, because PostgreSQL can't derive
-                        // type of column and assumes it as `text`.
                         | None -> SQL.nullExpr
 
                 yield SQL.SCExpr(name, expr)
@@ -1220,7 +1283,10 @@ type private QueryCompiler
                     let expr =
                         match Map.tryFind metaCol col.Meta with
                         | Some e -> e.Expression
-                        | None -> SQL.nullExpr
+                        | None ->
+                            match metaInfo.ValueType with
+                            | Some typ -> SQL.VECast(SQL.nullExpr, compileSQLColumnType typ)
+                            | None -> SQL.nullExpr
 
                     yield SQL.SCExpr(name, expr)
 
@@ -2458,7 +2524,7 @@ type private QueryCompiler
                   Dependency = attr.Dependency
                   Internal = attr.Internal
                   SingleRow = if attr.Dependency = DSPerRow then None else Some colExpr
-                  ValueType = None }
+                  ValueType = tryValueExprType colExpr }
 
             let col = { Expression = colExpr; Info = info }
             (CMRowAttribute name, col)
@@ -2524,7 +2590,7 @@ type private QueryCompiler
                                   Dependency = attr.Attribute.Value.Dependency
                                   Internal = attr.Attribute.Value.Internal
                                   SingleRow = getSingleRowAttributeExpr name attr.Attribute.Value compiled
-                                  ValueType = None }
+                                  ValueType = tryValueExprType compiled }
 
                             let ret = { Expression = compiled; Info = info }
 
@@ -2550,7 +2616,7 @@ type private QueryCompiler
                           Dependency = attr.Dependency
                           Internal = attr.Internal
                           SingleRow = Some compiled
-                          ValueType = None }
+                          ValueType = tryValueExprType compiled }
 
                     let ret = { Expression = compiled; Info = info }
                     (attrCol, ret)
@@ -3057,7 +3123,7 @@ type private QueryCompiler
                   Dependency = attr.Dependency
                   Internal = attr.Internal
                   SingleRow = getSingleRowAttributeExpr attrName attr ret
-                  ValueType = None }
+                  ValueType = tryValueExprType ret }
 
             paths <- newPaths
             let ret = { Expression = ret; Info = info }
@@ -3833,7 +3899,7 @@ type private QueryCompiler
                       Dependency = attr.Dependency
                       Internal = attr.Internal
                       SingleRow = Some colExpr
-                      ValueType = None }
+                      ValueType = tryValueExprType colExpr }
 
                 let column =
                     { Name = columnName colType
