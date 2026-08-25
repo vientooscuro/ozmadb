@@ -1,0 +1,180 @@
+{
+    $stage reference(marketing.campaigns_statuses) null @{
+        caption = 'Стадия'
+    },
+    $action_type reference(pm.actions_types) null @{
+        caption = 'Тип действия'
+    },
+    $is_archive bool default false @{
+        caption = 'Архив',
+        dirty_hack_order = 3
+    },
+    $basket reference(crm.baskets) null @{
+        caption = 'Корзинка продуктов'
+    },
+    $tapped_on_link bool default false @{
+        caption = 'Перешли по ссылке'
+    },
+    $display_info bool default true @{
+        caption = 'Показать инфо по рассылке'
+    }
+}:
+-- The per-campaign figures below used to be CTEs that aggregated all of pm.actions
+-- (~590k rows) and all of marketing.email_statuses_for_actions (~1.3M rows) on every
+-- call, even though the table is paginated 25 rows at a time. They are correlated
+-- subqueries now, so only the campaigns actually on screen are counted. The action
+-- lookup is a UNION rather than an OR because an OR over the two campaign paths is
+-- not indexable and falls back to a sequential scan.
+WITH event_type_ids as (
+    select
+        (select id from marketing.email_event_types where name = 'ok_sent') as ok_sent_id,
+        (select id from marketing.email_event_types where name = 'ok_delivered') as ok_delivered_id,
+        (select id from marketing.email_event_types where name = 'ok_read') as ok_read_id,
+        (select id from marketing.email_event_types where name = 'ok_link_visited') as ok_link_visited_id,
+        (select id from marketing.email_event_types where name = 'payment_completed') as payment_completed_id
+)
+SELECT
+    @type = 'table',
+    @title = 'Кампании' || COALESCE(': ' || $stage=>__main, ''),
+    @show_argument_button = true,
+    @create_link = {
+        ref: &marketing.campaign_form,
+        default_values: {
+            stage: (SELECT id FROM marketing.campaigns_statuses WHERE name = 'draft'),
+            responsible_person: (SELECT id FROM base.people WHERE user = $$user_id)
+        }
+    },
+    @row_link = &marketing.campaign_form,
+    @lazy_load = { pagination: { per_page: 25}},
+    @buttons = [{
+        caption: 'Архивировать выделенные записи',
+        icon: 'archive',
+        visible: NOT $is_archive,
+        variant: 'danger',
+        display: 'selectionPanel',
+        add_selected_entry_ids: true,
+        action: { schema: 'admin', name: 'archive_entry' },
+        args: { entity: { schema: 'marketing', name: 'campaigns' }, is_archive: true }
+    },
+    {
+        caption: 'Разархивировать выделенные записи',
+        icon: 'unarchive',
+        visible: $is_archive,
+        variant: 'success',
+        display: 'selectionPanel',
+        add_selected_entry_ids: true,
+        action: { schema: 'admin', name: 'archive_entry' },
+        args: { entity: { schema: 'marketing', name: 'campaigns' }, is_archive: false }
+    }],
+    id @{
+        column_width = 60
+    },
+    name @{
+        column_width = 300
+    },
+    stage @{
+        column_width = 100,
+        default_value = (SELECT id FROM marketing.campaigns_statuses WHERE name = 'draft'),
+    },
+    campaign_start_date @{
+        column_width = 125
+    },
+    campaign_due_date @{
+        column_width = 125
+    },
+    responsible_person @{
+        default_value = (SELECT id FROM base.people WHERE user = $$user_id LIMIT 1),
+        column_width = 200
+    },
+    created_datetime @{
+        column_width = 150
+    },
+     unisender_campaign_id @{
+        soft_disabled = $$user_id=>name != 'bella.fatt@gogol.school',
+        caption = 'ID кампании в unisender',
+        form_block = 1
+    },
+    created_person @{
+        column_width = 150
+    }, 
+    basket @{},
+    (case when $display_info is not null and $display_info
+               and campaigns.unisender_campaign_id is not null
+          then (
+              select count(a.id) from pm.actions as a
+              where a.sys_related_contact=>email=>data is not null
+                and a.id in (
+                    select x.id from pm.actions as x
+                    where x.from_campaign = campaigns.id
+                    union
+                    select y.id from pm.actions as y
+                    where y.parent_action in (
+                        select z.id from pm.actions as z
+                        where z.from_campaign = campaigns.id))
+          )
+          else 0 end) as total_emails @{
+        caption = 'Всего писем',
+        form_block = 1,
+        visible = $display_info is not null and $display_info
+    },
+    COALESCE(email_stats.total_sent_emails, 0) as total_sent_emails @{
+        caption = 'Всего отправлено писем',
+        form_block = 1,
+        visible = case when $display_info is null or not $display_info then false else true end
+    },
+    COALESCE(email_stats.total_delivered_emails, 0) as total_delivered_emails @{
+        caption = 'Всего доставлено писем',
+        form_block = 1,
+        visible = case when $display_info is null or not $display_info then false else true end
+    },
+    COALESCE(email_stats.total_read_emails, 0) as total_read_emails @{
+        caption = 'Всего прочитано писем',
+        form_block = 1,
+        visible = case when $display_info is null or not $display_info then false else true end
+    },
+    COALESCE(email_stats.total_visited_links, 0) as total_visited_links @{
+        caption = 'Всего перешли по ссылке',
+        form_block = 1,
+        visible = case when $display_info is null or not $display_info then false else true end
+    },
+    COALESCE(email_stats.total_payments, 0) as total_payments @{
+        caption = 'Всего оплатили',
+        form_block = 1,
+        visible = case when $display_info is null or not $display_info then false else true end
+    },
+FROM 
+    marketing.campaigns
+    -- One pass over email_statuses_for_actions per campaign instead of five separate
+    -- correlated subqueries; the (campaign_id, event_type) index serves all counters at once.
+    LEFT JOIN LATERAL (
+        SELECT
+            count(es.id) FILTER (WHERE es.event_type = event_type_ids.ok_sent_id) as total_sent_emails,
+            count(es.id) FILTER (WHERE es.event_type = event_type_ids.ok_delivered_id) as total_delivered_emails,
+            count(es.id) FILTER (WHERE es.event_type = event_type_ids.ok_read_id) as total_read_emails,
+            count(distinct es.action) FILTER (WHERE es.event_type = event_type_ids.ok_link_visited_id) as total_visited_links,
+            count(es.id) FILTER (WHERE es.event_type = event_type_ids.payment_completed_id) as total_payments
+        FROM marketing.email_statuses_for_actions as es
+        JOIN event_type_ids ON TRUE
+        WHERE es.campaign_id = campaigns.unisender_campaign_id
+          -- Same guard as before: nothing is counted unless the columns are shown.
+          AND ($display_info is not null and $display_info)
+    ) AS email_stats ON TRUE
+
+WHERE
+    (is_deleted = $is_archive)
+    AND ($stage IS NULL OR stage = $stage)
+    AND ($action_type IS NULL OR EXISTS (select 1 from pm.actions
+        WHERE from_campaign = campaigns.id
+          AND type = $action_type
+    ))
+    AND ($basket is null or basket = $basket)
+    AND (not $tapped_on_link or EXISTS (select 1 from marketing.email_statuses_for_actions as email_statuses
+        join event_type_ids on true
+        where email_statuses.campaign_id = campaigns.unisender_campaign_id
+          and email_statuses.event_type = event_type_ids.ok_link_visited_id
+    ))
+ORDER BY 
+    -- campaign_start_date DESC, id desc
+    id desc
+FOR INSERT INTO 
+    marketing.campaigns
