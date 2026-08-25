@@ -426,11 +426,23 @@ let private setupResponseCompression (webAppBuilder: WebApplicationBuilder) =
 
     // Both providers are pinned explicitly: gzip defaults to `Fastest`, which costs us
     // about a third of the compression ratio on JSON for a couple of milliseconds saved.
-    let configureBrotli (options: BrotliCompressionProviderOptions) =
-        options.Level <- CompressionLevel.Optimal
+    // Compression happens on the request thread while the response is written, so on large
+    // payloads the level is a direct latency trade-off; `ozmaDB.compressionLevel` makes it
+    // tunable without a rebuild.
+    let level =
+        match
+            webAppBuilder.Configuration
+                .GetSection("OzmaDB")
+                .GetValue("CompressionLevel", "optimal")
+        with
+        | "fastest" -> CompressionLevel.Fastest
+        | "smallest" -> CompressionLevel.SmallestSize
+        | "none" -> CompressionLevel.NoCompression
+        | _ -> CompressionLevel.Optimal
 
-    let configureGzip (options: GzipCompressionProviderOptions) =
-        options.Level <- CompressionLevel.Optimal
+    let configureBrotli (options: BrotliCompressionProviderOptions) = options.Level <- level
+
+    let configureGzip (options: GzipCompressionProviderOptions) = options.Level <- level
 
     let services = webAppBuilder.Services
     ignore <| services.AddResponseCompression(configureCompression)
