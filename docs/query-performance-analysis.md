@@ -277,3 +277,43 @@ ON fin.transactions (is_deleted, transaction_date DESC, id DESC);
 Пять счётчиков сведены в один проход через `LEFT JOIN LATERAL` с `FILTER`: [campaigns_table.optimized.funql](campaigns_table.optimized.funql). Индекс `(campaign_id, event_type)` там уже есть и обслужит все пять сразу вместо пяти отдельных проходов по таблице на 1.34 млн строк.
 
 Не применил по одной причине: view заканчивается на `FOR INSERT INTO marketing.campaigns`, и добавление бокового соединения может сломать определение главной сущности для вставки. Это проверяется только применением, а view рабочий — поэтому решение за вами. Оригинал сохранён, откат — заменой текста обратно.
+
+---
+
+## Метрики по этапам запроса
+
+Добавлены в [Metrics.fs](../OzmaDB/src/Metrics.fs) и отдаются на `/metrics` вместе с остальными.
+
+| метрика | что показывает |
+|---|---|
+| `ozmadb_request_stage_duration_seconds{stage}` | `state` — получение состояния и проверка версии; `permissions` — применение роли к скомпилированному view; `serialize` — запись JSON в ответ |
+| `ozmadb_sql_duration_seconds{kind}` | одно SQL-выражение с round trip: `query` — выборки, `row` — однострочные, `nonquery` — запись и DDL |
+| `ozmadb_role_view_cache_total{result}` | попадания и промахи кэша view, ограниченных ролью |
+
+Полезные запросы:
+
+```promql
+# Где время: доля каждого этапа
+sum by (stage) (rate(ozmadb_request_stage_duration_seconds_sum[5m]))
+
+# Медиана и хвост по этапам
+histogram_quantile(0.5, sum by (stage, le) (rate(ozmadb_request_stage_duration_seconds_bucket[5m])))
+histogram_quantile(0.99, sum by (stage, le) (rate(ozmadb_request_stage_duration_seconds_bucket[5m])))
+
+# Сколько времени уходит в PostgreSQL против всего остального
+sum(rate(ozmadb_sql_duration_seconds_sum[5m]))
+
+# Эффективность кэша прав
+sum(rate(ozmadb_role_view_cache_total{result="hit"}[5m]))
+  / sum(rate(ozmadb_role_view_cache_total[5m]))
+```
+
+### Что метрики показали сразу
+
+На стенде по гистограммам стало видно то, что раньше было гаданием:
+
+- `permissions` — 27 из 33 вызовов уложились в 0.5 мс: кэш прав работает.
+- `state` — 20 вызовов ≤0.5 мс (сработал TTL-кэш), 31 вызов в диапазоне 5–10 мс (проверка версии), плюс редкие холодные перестройки в десятки секунд.
+- `serialize` — большинство ≤5 мс, но у крупных ответов доходит до **100–250 мс**.
+
+То есть недостающее время на тяжёлых страницах — это сериализация ответа, а не SQL и не движок. Следующий шаг оптимизации, если понадобится, — переход на `System.Text.Json` (в коде уже стоит `// Convert that to async when we move to System.Text.Json`) либо сокращение объёма ответа.
