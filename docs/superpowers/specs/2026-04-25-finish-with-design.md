@@ -197,8 +197,22 @@ html[data-theme-style='dark-glass'] {
 ## Toast behavior
 
 - **success**: auto-hides (default Bootstrap-Vue timeout)
-- **warning**: `noAutoHide: true` — requires manual dismiss
+- **warning**: auto-hides after 15s (revised 2026-08-26 — see below)
 - **error**: `noAutoHide: true` — requires manual dismiss
+
+Warnings originally required a manual dismiss too. Toasts live in a global
+toaster outside `router-view`, so a pinned one outlived the screen that raised
+it and later read as a problem of whatever screen the user had moved on to —
+which is exactly how one was reported. Only errors are pinned now, and the
+frontend also drops every toast when the route path changes.
+
+## Event log
+
+`ActionResponse.ShouldLog` is true whenever `FinishInfo` reports a status other
+than `success`, so a run ending in a warning or an error lands in
+`public.events` as a `runAction` entry with the status and message in
+`Details`. Successful runs stay unlogged: they are far too frequent to keep,
+and nobody goes looking for them.
 
 ## Scope
 
