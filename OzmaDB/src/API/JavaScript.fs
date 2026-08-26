@@ -487,7 +487,7 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
 
         let status =
             match body.Value<string>("status") with
-            | null -> "success"
+            | null -> ActionFinishStatus.Success
             | s -> s
 
         let userData =

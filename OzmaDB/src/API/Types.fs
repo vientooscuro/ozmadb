@@ -808,19 +808,46 @@ type RunActionRequest =
       [<DataMember(EmitDefaultValue = false)>]
       Args: JObject option }
 
+module ActionFinishStatus =
+    [<Literal>]
+    let Success = "success"
+
+    [<Literal>]
+    let Warning = "warning"
+
+    [<Literal>]
+    let Error = "error"
+
 [<NoEquality; NoComparison>]
 type ActionFinishInfo =
     { Status: string // "success" | "warning" | "error"
       UserData: JToken option
       Message: string option }
 
+    member this.IsSuccess = this.Status = ActionFinishStatus.Success
+
 [<NoEquality; NoComparison>]
 type ActionResponse =
     { Result: JObject option
       FinishInfo: ActionFinishInfo option }
 
-    member this.ShouldLog = false
-    member this.Details = Map.empty
+    // Successful runs are far too noisy to keep, but an action that finished
+    // with a warning or an error is exactly what one needs in the event log
+    // when a user reports a toast nobody can account for afterwards.
+    member this.ShouldLog =
+        match this.FinishInfo with
+        | Some info -> not info.IsSuccess
+        | None -> false
+
+    member this.Details =
+        match this.FinishInfo with
+        | Some info when not info.IsSuccess ->
+            let details = Map.singleton "status" (JToken.op_Implicit info.Status: JToken)
+
+            match info.Message with
+            | Some message -> Map.add "message" (JToken.op_Implicit message: JToken) details
+            | None -> details
+        | _ -> Map.empty
 
     interface ILoggableResponse with
         member this.ShouldLog = this.ShouldLog
