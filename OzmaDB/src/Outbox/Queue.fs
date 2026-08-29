@@ -22,7 +22,11 @@ type ClaimedOutboxMessage =
       TimeoutMs: int option
       MaxRetries: int
       RetryBaseDelayMs: int
-      Attempts: int }
+      Attempts: int
+      // Action to notify once delivery finishes, with its raw JSON arguments.
+      CallbackSchema: string option
+      CallbackName: string option
+      CallbackArgs: string option }
 
 let private outboxTableName = "public.outbox_messages"
 
@@ -58,6 +62,13 @@ let private parseClaimedOutboxMessage (row: (SQL.SQLName * SQL.SimpleValueType *
         | SQL.VNull -> None
         | v -> failwithf "Invalid outbox %s value: %O" fieldName v
 
+    let parseJsonValue idx =
+        match get idx with
+        | SQL.VJson j -> Some(j.Json.ToString(Newtonsoft.Json.Formatting.None))
+        | SQL.VString s -> Some s
+        | SQL.VNull -> None
+        | v -> failwithf "Invalid outbox json value: %O" v
+
     let parseHeadersValue idx =
         match get idx with
         | SQL.VJson j ->
@@ -75,7 +86,10 @@ let private parseClaimedOutboxMessage (row: (SQL.SQLName * SQL.SimpleValueType *
       TimeoutMs = parseOptionalInt 5 "timeout_ms"
       MaxRetries = parseInt 6 "max_retries"
       RetryBaseDelayMs = parseInt 7 "retry_base_delay_ms"
-      Attempts = parseInt 8 "attempts" }
+      Attempts = parseInt 8 "attempts"
+      CallbackSchema = parseOptionalString 9 "callback_schema"
+      CallbackName = parseOptionalString 10 "callback_name"
+      CallbackArgs = parseJsonValue 11 }
 
 let tryClaimDueOutboxMessage
     (query: QueryConnection)
@@ -109,7 +123,10 @@ RETURNING
   m.timeout_ms,
   m.max_retries,
   m.retry_base_delay_ms,
-  m.attempts
+  m.attempts,
+  m.callback_schema,
+  m.callback_name,
+  m.callback_args
 """
                 outboxTableName
                 outboxTableName
@@ -119,13 +136,28 @@ RETURNING
         | Some row -> return Some(parseClaimedOutboxMessage row)
     }
 
+let private maxResponseBodyLength = 4000
+
+let private truncate (maxLength: int) (text: string) =
+    if String.IsNullOrEmpty(text) then None
+    elif text.Length <= maxLength then Some text
+    else Some(text.Substring(0, maxLength))
+
 let completeClaimedOutboxMessage
     (query: QueryConnection)
     (messageId: int)
     (statusCode: int)
+    (responseBody: string)
     (cancellationToken: CancellationToken)
     : Task =
     task {
+        // The body is kept because a 2xx does not mean success for every API:
+        // plenty of them answer 200 with an error inside the payload.
+        let bodySql =
+            match truncate maxResponseBodyLength responseBody with
+            | Some body -> SQL.renderSqlString body
+            | None -> "NULL"
+
         let q =
             sprintf
                 """
@@ -133,11 +165,44 @@ UPDATE %s
 SET completed_at = transaction_timestamp(),
     locked_until = NULL,
     last_status_code = %s,
-    last_error = NULL
+    last_error = NULL,
+    last_response_body = %s
 WHERE id = %s
 """
                 outboxTableName
                 (SQL.renderSqlInt statusCode)
+                bodySql
+                (SQL.renderSqlInt messageId)
+
+        let! _ = query.ExecuteNonQuery q Map.empty cancellationToken
+        return ()
+    }
+
+/// Records the outcome of the callback. Delivery is already committed at this point,
+/// so a failure here must never put the message back into the queue: re-delivering
+/// would send a second request, and for something like a fiscal receipt that is fatal.
+let recordCallbackOutcome
+    (query: QueryConnection)
+    (messageId: int)
+    (error: string option)
+    (cancellationToken: CancellationToken)
+    : Task =
+    task {
+        let errorSql =
+            match error |> Option.bind (truncate maxResponseBodyLength) with
+            | Some err -> SQL.renderSqlString err
+            | None -> "NULL"
+
+        let q =
+            sprintf
+                """
+UPDATE %s
+SET callback_completed_at = transaction_timestamp(),
+    callback_error = %s
+WHERE id = %s
+"""
+                outboxTableName
+                errorSql
                 (SQL.renderSqlInt messageId)
 
         let! _ = query.ExecuteNonQuery q Map.empty cancellationToken

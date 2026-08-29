@@ -1168,6 +1168,31 @@ namespace OzmaDBSchema.System
         [ColumnField("string")]
         public string? LastError { get; set; }
 
+        // Response body of the last delivery attempt, truncated. Without it a successful
+        // delivery told us nothing: many APIs answer 200 with an error inside the body.
+        [ColumnField("string")]
+        public string? LastResponseBody { get; set; }
+
+        // Action to call once delivery finishes, so the caller can react to the answer.
+        // The queue is fire-and-forget by nature, so this is the only way back.
+        [ColumnField("string", IsImmutable = true)]
+        public string? CallbackSchema { get; set; }
+
+        [ColumnField("string", IsImmutable = true)]
+        public string? CallbackName { get; set; }
+
+        [ColumnField("json", IsImmutable = true, Default = "{}")]
+        [Column(TypeName = "jsonb")]
+        public string? CallbackArgs { get; set; }
+
+        // Filled when the callback itself failed: delivery already succeeded by then,
+        // so this must not trigger a re-send — a duplicate fiscal receipt is unacceptable.
+        [ColumnField("string")]
+        public string? CallbackError { get; set; }
+
+        [ColumnField("datetime")]
+        public Instant? CallbackCompletedAt { get; set; }
+
         [ColumnField("datetime", IsImmutable = true)]
         public Instant CreatedAt { get; set; }
     }

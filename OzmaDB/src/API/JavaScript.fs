@@ -109,6 +109,13 @@ type HttpRequestResponse =
       Body: string
       Json: JToken option }
 
+// Action to run once the queued request is delivered. Its `Args` are merged with the
+// delivery result, so the caller gets the answer back without polling the queue.
+type EnqueueOutboxCallback =
+    { Schema: string
+      Name: string
+      Args: JObject option }
+
 type EnqueueOutboxRequest =
     { Url: string
       Method: string option
@@ -117,7 +124,8 @@ type EnqueueOutboxRequest =
       TimeoutMs: int option
       MaxRetries: int option
       RetryBaseDelayMs: int option
-      DelayMs: int option }
+      DelayMs: int option
+      OnResponse: EnqueueOutboxCallback option }
 
 type EnqueueOutboxResponse = { Id: int }
 
@@ -880,6 +888,23 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
                 outbox.DueAt <- dueAt
                 outbox.CreatedAt <- createdAt
                 outbox.Attempts <- 0
+
+                match req.OnResponse with
+                | None -> ()
+                | Some callback ->
+                    let schema = callback.Schema.Trim()
+                    let name = callback.Name.Trim()
+
+                    if schema = "" || name = "" then
+                        this.FormatError "onResponse requires both schema and name"
+
+                    outbox.CallbackSchema <- schema
+                    outbox.CallbackName <- name
+
+                    outbox.CallbackArgs <-
+                        callback.Args
+                        |> Option.map (fun args -> JsonConvert.SerializeObject(args, Formatting.None))
+                        |> Option.defaultValue "{}"
 
                 ignore <| tx.System.OutboxMessages.Add(outbox)
                 let! _ = tx.SystemSaveChangesAsync(handle.API.Request.Context.CancellationToken)
