@@ -153,6 +153,7 @@ type OutboxWorker
                         | Ok _ -> None
                         | Error err ->
                             let message = sprintf "%O" err
+
                             logger.LogWarning(
                                 "Outbox callback {schema}.{name} failed for message {id}: {error}",
                                 schemaName,
@@ -163,7 +164,12 @@ type OutboxWorker
 
                             Some message
 
-                    do! recordCallbackOutcome ctx.Transaction.Connection.Query claimed.Id callbackError cancellationToken
+                    do!
+                        recordCallbackOutcome
+                            ctx.Transaction.Connection.Query
+                            claimed.Id
+                            callbackError
+                            cancellationToken
 
                     let! commitResult = ctx.Commit()
 
@@ -277,14 +283,7 @@ type OutboxWorker
 
                         match callbackOutcome with
                         | Some(status, body, deliveryError) ->
-                            do!
-                                runDeliveryCallback
-                                    connectionString
-                                    claimed
-                                    status
-                                    body
-                                    deliveryError
-                                    cancellationToken
+                            do! runDeliveryCallback connectionString claimed status body deliveryError cancellationToken
                         | None -> ()
                     | Error err ->
                         logger.LogError("Failed to commit outbox transaction: {error}", err.LogMessage)
