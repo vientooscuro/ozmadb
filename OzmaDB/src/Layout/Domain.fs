@@ -388,7 +388,10 @@ type private DomainsBuilder(layout: Layout) =
         (field: ResolvedColumnField)
         : FieldDomain option =
         match field.FieldType with
-        | FTScalar(SFTReference(refEntityRef, opts)) -> Some <| buildReferenceFieldDomain entity fieldRef refEntityRef
+        // An array of references picks its values from the same rows as a single one,
+        // so the domain is built the same way.
+        | FTScalar(SFTReference(refEntityRef, opts))
+        | FTArray(SFTReference(refEntityRef, opts)) -> Some <| buildReferenceFieldDomain entity fieldRef refEntityRef
         // We can also potentially make domains for enums and booleans.
         | _ -> None
 

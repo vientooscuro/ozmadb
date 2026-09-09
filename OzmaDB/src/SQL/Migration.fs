@@ -193,6 +193,12 @@ let private defaultUsingExpression (name: ColumnName) (fromType: DBValueType) (t
     | (VTScalar(SQLRawString "text"), toType) ->
         let colRef = { Table = None; Name = name }: ColumnRef
         Some(VECast(VEColumn colRef, toType))
+    // Scalar to array of the same type: keep the old value as a single-element array,
+    // otherwise PostgreSQL refuses the cast and the whole migration fails.
+    | (VTScalar fromScalar, VTArray toScalar) when fromScalar = toScalar ->
+        let colRef = { Table = None; Name = name }: ColumnRef
+
+        Some(VECase([| (VEIsNull(VEColumn colRef), VEValue VNull) |], Some(VEArray [| VEColumn colRef |])))
     | _ -> None
 
 let private migrateColumnAttrs (name: ColumnName) (fromMeta: ColumnMeta) (toMeta: ColumnMeta) : TableOperation seq =

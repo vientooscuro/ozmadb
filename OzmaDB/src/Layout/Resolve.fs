@@ -255,8 +255,16 @@ type private Phase1Resolver(layout: SourceLayout) =
             | FTScalar SFTUserViewRef
             | FTArray SFTUserViewRef ->
                 raisef ResolveLayoutException "User view references are not supported as field types"
-            | FTArray(SFTReference(ref, opts)) ->
-                raisef ResolveLayoutException "Arrays of references are not supported as field types"
+            // An array of references is stored as a plain array of ids: PostgreSQL cannot
+            // put a foreign key on array elements, so there is no referential integrity
+            // and no delete action to speak of.
+            | FTArray(SFTReference(_, opts)) as t ->
+                if Option.isSome opts then
+                    raisef
+                        ResolveLayoutException
+                        "Arrays of references don't support delete actions: there is no foreign key behind them"
+
+                t
             | FTArray(SFTEnum _) -> raisef ResolveLayoutException "Arrays of enums are not supported as field types"
             | FTScalar(SFTReference(refEntityRef, opts)) as t ->
                 let deleteAction = Option.defaultValue RDANoAction opts
@@ -424,8 +432,7 @@ type private Phase1Resolver(layout: SourceLayout) =
         let foreignConstraintNames =
             let makeName (name, c: ResolvedColumnField) =
                 match c.FieldType with
-                | FTScalar(SFTReference(e, _))
-                | FTArray(SFTReference(e, _)) ->
+                | FTScalar(SFTReference(e, _)) ->
                     Some(foreignConstraintSQLName hashName c.HashName, { Entity = entityRef; Name = name })
                 | _ -> None
 
