@@ -135,6 +135,11 @@ type private APIHandle(api: IOzmaDBAPI) =
     member this.API = api
     member this.Logger = logger
 
+    // `finishWith` info belongs to a single action run, not to the engine: engines
+    // are pooled and reused, so anything kept on the engine leaks into whatever
+    // request picks the runtime up next.
+    member val FinishInfo: ActionFinishInfo option = None with get, set
+
 let private preludeSource =
     """
     const unwrappedApiProxy = globalThis.unwrappedApiProxy;
@@ -451,7 +456,6 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
     inherit SchedulerJSEngine<Task.SerializingTrackingTaskScheduler>(runtime, env)
 
     let mutable topLevelAPI = None: IOzmaDBAPI option
-    let mutable currentFinishInfo: ActionFinishInfo option = None
     let apiHandle = AsyncLocal<APIHandle>()
     let httpPolicy = normalizePolicy settings.HttpPolicy
     let outboxSettings = settings.Outbox
@@ -489,7 +493,7 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
     let errorConstructor = this.Engine.Global.["OzmaDBError"] :?> IJavaScriptObject
 
     [<ScriptUsage(ScriptAccess.Full)>]
-    member _.SetFinishWith(arg: obj) =
+    member this.SetFinishWith(arg: obj) =
         use reader = new V8JsonReader(arg)
         let body = JToken.Load(reader) :?> JObject
 
@@ -508,13 +512,11 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
             | null -> None
             | s -> Some s
 
-        currentFinishInfo <-
+        this.GetHandle().FinishInfo <-
             Some
                 { Status = status
                   UserData = userData
                   Message = message }
-
-    member _.CurrentFinishInfo = currentFinishInfo
 
     member inline private this.ThrowErrorWithInner (e: #IErrorDetails) (innerException: exn) : 'b =
         let body = this.Json.Serialize(e)
@@ -593,7 +595,7 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
 
         ret
 
-    member private this.GetHandle() =
+    member private this.GetHandle() : APIHandle =
         let handle = apiHandle.Value
 
         if isRefNull handle then
@@ -919,6 +921,32 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
         topLevelAPI <- Some api
 
     member this.ResetAPI api = topLevelAPI <- None
+
+    /// Runs `f` in a fresh API handle scope and reports what it passed to `finishWith`,
+    /// if anything. The handle is what makes the result belong to this run alone: the
+    /// engine itself outlives the request and is shared with every other one.
+    member this.RunWithFinishInfo(f: unit -> Task<'a>) : Task<'a * ActionFinishInfo option> =
+        let previous = apiHandle.Value
+
+        let api =
+            if isRefNull previous then
+                match topLevelAPI with
+                | None -> failwith "API handle is not set"
+                | Some api -> api
+            else
+                previous.API
+
+        let handle = APIHandle(api)
+
+        task {
+            apiHandle.Value <- handle
+
+            try
+                let! res = f ()
+                return (res, handle.FinishInfo)
+            finally
+                apiHandle.Value <- previous
+        }
 
     // Ugh. Workarounds.
     member private this.BaseRunAsyncJSFunction

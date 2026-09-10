@@ -71,17 +71,24 @@ type ActionResponse =
       FinishInfo: ActionFinishInfo option }
 ```
 
-**`OzmaDB/src/API/JavaScript.fs`** — mutable field + method on the proxy class:
+**`OzmaDB/src/API/JavaScript.fs`** — the info lives on the per-run `APIHandle`, never on
+the engine. Engines are pooled and shared between requests, so a field on the engine
+would hand the next request whatever the previous one passed to `finishWith`:
 
 ```fsharp
-let mutable private currentFinishInfo: ActionFinishInfo option = None
+type private APIHandle(api: IOzmaDBAPI) =
+    member val FinishInfo: ActionFinishInfo option = None with get, set
 
-member _.SetFinishWith(body: JObject) =
-    // parse status/userData/message from body, store
-    currentFinishInfo <- Some { ... }
+member this.SetFinishWith(arg: obj) =
+    // parse status/userData/message from arg, store on the current handle
+    this.GetHandle().FinishInfo <- Some { ... }
 
-member _.CurrentFinishInfo = currentFinishInfo
+/// Opens a fresh handle scope for one run and reports what it finished with.
+member this.RunWithFinishInfo(f: unit -> Task<'a>) : Task<'a * ActionFinishInfo option>
 ```
+
+The handle is held in an `AsyncLocal`, so it survives `await` inside the action and
+still cannot outlive the run.
 
 JS prelude (inside the same file, `OzmaDBCurrent` class):
 
@@ -91,19 +98,19 @@ finishWith(status, userData, message) {
 };
 ```
 
-**`OzmaDB/src/Actions/Run.fs`** — expose FinishInfo from ActionScript:
-
-```fsharp
-member this.FinishInfo = this.Runtime.CurrentFinishInfo
-```
-
-**`OzmaDB/src/API/Actions.fs`** — read after Run:
+**`OzmaDB/src/API/Actions.fs`** — run inside the scope and take both results from it:
 
 ```fsharp
 let runAction () =
     task {
-        let! res = action.Run(args, ctx.CancellationToken)
-        return Ok { Result = res; FinishInfo = action.FinishInfo }
+        let run () = action.Run(args, ctx.CancellationToken)
+
+        let! res, finishInfo =
+            match action.Runtime with
+            | :? OzmaJSEngine as e -> e.RunWithFinishInfo run
+            | _ -> task { let! res = run () in return (res, None) }
+
+        return Ok { Result = res; FinishInfo = finishInfo }
     }
 ```
 

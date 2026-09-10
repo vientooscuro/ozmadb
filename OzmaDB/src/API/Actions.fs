@@ -51,12 +51,16 @@ type ActionsAPI(api: IOzmaDBAPI) =
 
                                     let runAction () =
                                         task {
-                                            let! res = action.Run(args, ctx.CancellationToken)
+                                            let run () = action.Run(args, ctx.CancellationToken)
 
-                                            let finishInfo =
+                                            let! res, finishInfo =
                                                 match action.Runtime with
-                                                | :? OzmaJSEngine as e -> e.CurrentFinishInfo
-                                                | _ -> None
+                                                | :? OzmaJSEngine as e -> e.RunWithFinishInfo run
+                                                | _ ->
+                                                    task {
+                                                        let! res = run ()
+                                                        return (res, None)
+                                                    }
 
                                             return
                                                 Ok
