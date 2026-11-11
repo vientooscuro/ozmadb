@@ -788,6 +788,9 @@ type OzmaJSEngine(runtime: JSRuntime, env: JSEnvironment, settings: JSHostSettin
         this.WrapAsyncHostFunction
         <| fun () ->
             task {
+                if this.GetHandle().API.Request.IsDryRun then
+                    this.FormatError "HTTP requests are disabled during dry run"
+
                 let req = this.Deserialize arg: HttpRequestBody
                 let headers = this.HeadersMap req.Headers
                 let (headers, body) = this.WithSerializedBody headers req.Body

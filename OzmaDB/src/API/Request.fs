@@ -126,6 +126,7 @@ type RequestContext private (ctx: IContext, initialUserInfo: RequestUserInfo, op
 
     let mutable source = ESAPI
     let mutable sourceDepth = 0
+    let mutable isDryRun = false
 
     let makeEvent (addDetails: EventEntry -> unit) =
         let event =
@@ -220,7 +221,14 @@ type RequestContext private (ctx: IContext, initialUserInfo: RequestUserInfo, op
     member this.Context = ctx
     member this.GlobalArguments = globalArguments
 
-    member this.WriteEvent(addDetails: EventEntry -> unit) = ctx.WriteEvent(makeEvent addDetails)
+    member this.IsDryRun
+        with get () = isDryRun
+        and set value = isDryRun <- value
+
+    // These events are written on a separate connection, so a rolled back dry run would still persist them.
+    member this.WriteEvent(addDetails: EventEntry -> unit) =
+        if not isDryRun then
+            ctx.WriteEvent(makeEvent addDetails)
 
     member this.WriteEventSync(addDetails: EventEntry -> unit) : Task =
         ignore <| ctx.Transaction.System.Events.Add(makeEvent addDetails)
@@ -341,6 +349,10 @@ type RequestContext private (ctx: IContext, initialUserInfo: RequestUserInfo, op
         member this.Source = source
         member this.Quota = opts.Quota
         member this.Logger = logger
+
+        member this.IsDryRun
+            with get () = this.IsDryRun
+            and set value = this.IsDryRun <- value
 
         member this.WriteEvent addDetails = this.WriteEvent addDetails
         member this.WriteEventSync addDetails = this.WriteEventSync addDetails

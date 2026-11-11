@@ -272,6 +272,8 @@ type IRequestContext =
     abstract Source: EventSource with get
     abstract Quota: RequestQuota with get
     abstract Logger: ILogger with get
+    // Set for `/introspection/dry_run`: outbound HTTP is refused and out-of-transaction events are dropped.
+    abstract IsDryRun: bool with get, set
 
     abstract member WriteEvent: (EventEntry -> unit) -> unit
     abstract member WriteEventSync: (EventEntry -> unit) -> Task

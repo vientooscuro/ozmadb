@@ -2,10 +2,12 @@ import os
 import re
 import shutil
 import subprocess
+import random
+import time
 
 import pytest
 
-from conftest import query_rows, run_transaction
+from conftest import insert, query_rows, run_transaction
 
 
 def dry_run(api, operations: list[dict], mode: str | None = None) -> dict:
@@ -168,3 +170,58 @@ def test_normal_commit_still_migrates(api, test_schema):
     run_transaction(api, [delete_op("public", "column_fields", column_id(api, "mcp_test", "parent", "committed_col"))])
     fields = api.get("/introspection/schema/mcp_test/parent").json()["columnFields"]
     assert "committed_col" not in [f["name"] for f in fields]
+
+
+PROBE_TRIGGER = """export default async function handler(event, args) {
+  OzmaDB.writeEvent({ probe: "dryprobe-" + String(args.total) + "-end" });
+  if (Number(args.total) === 9999999) {
+    await OzmaDB.httpRequest({ url: "http://127.0.0.1:9/dry-run-probe" });
+  }
+}
+"""
+
+
+def event_count(api, condition: str) -> int:
+    return len(query_rows(api, f"select id from public.events where {condition}"))
+
+
+def test_dry_run_disables_trigger_side_effects(api, test_schema):
+    trigger_id = insert(
+        api,
+        "public",
+        "triggers",
+        {
+            "schema_id": schema_id(api, "mcp_test"),
+            "trigger_entity_id": entity_id(api, "mcp_test", "orders"),
+            "name": "dry_run_probe",
+            "time": "AFTER",
+            "on_insert": True,
+            "procedure": PROBE_TRIGGER,
+        },
+    )
+    dry_total, committed_total = random.sample(range(100000, 999999), 2)
+    try:
+        # Outbound HTTP is refused before any policy check, so the request is never attempted.
+        resp = api.post(
+            "/introspection/dry_run",
+            json={"operations": [insert_op("mcp_test", "orders", {"total": 9999999})]},
+        )
+        assert resp.status_code != 200, resp.text
+        assert "HTTP requests are disabled during dry run" in resp.text
+
+        body = dry_run(api, [insert_op("mcp_test", "orders", {"total": dry_total})])
+        assert body["ok"] is True, body
+
+        # The same trigger outside a dry run writes its event; events are written in order, so once it is
+        # visible, anything the dry runs had logged would be too.
+        order_id = run_transaction(api, [insert_op("mcp_test", "orders", {"total": committed_total})])[0]["id"]
+        run_transaction(api, [delete_op("mcp_test", "orders", order_id)])
+        deadline = time.monotonic() + 15
+        while event_count(api, f"type = 'writeEvent' and request->>'details' like '%dryprobe-{committed_total}-end%'") == 0:
+            assert time.monotonic() < deadline, "the committed trigger event was never written"
+            time.sleep(0.2)
+
+        assert event_count(api, f"type = 'writeEvent' and request->>'details' like '%dryprobe-{dry_total}-end%'") == 0
+        assert event_count(api, "error->>'message' like '%disabled during dry run%'") == 0
+    finally:
+        run_transaction(api, [delete_op("public", "triggers", trigger_id)])

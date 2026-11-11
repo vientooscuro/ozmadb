@@ -376,6 +376,8 @@ let introspectionApi (serviceProvider: IServiceProvider) : Endpoint list =
                               DeferConstraints = req.DeferConstraints
                               ForceAllowBroken = req.ForceAllowBroken }
 
+                        api.Request.IsDryRun <- true
+
                         // Nothing is committed: the request transaction is rolled back when the job ends.
                         runHTTPTransaction api transaction
                         <| fun ret ->
