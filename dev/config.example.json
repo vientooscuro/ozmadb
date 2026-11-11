@@ -62,6 +62,17 @@
     "outboxWorker": {
       "pollDelayMs": 1000,
       "maxBatchPerConnection": 64
+    },
+    // Opt-ins for the riskier /introspection endpoints (all of /introspection is root-only).
+    "introspection": {
+      // POST /introspection/sql: arbitrary SELECTs in a read-only transaction that is never committed. Root can
+      // read anything the database role can, and read-only mode still allows side-effecting functions such as
+      // pg_terminate_backend/pg_cancel_backend on other sessions of the same role. Refused when the database has
+      // dblink/postgres_fdw or the role is privileged.
+      "allowRawSql": false,
+      // POST /introspection/dry_run with "mode": "full": runs the migration DDL and rolls it back, holding the
+      // migration lock and locks on altered tables for up to ~30 s (statement_timeout). "plan" mode is always on.
+      "allowFullDryRun": false
     }
   }
 }

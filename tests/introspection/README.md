@@ -52,8 +52,25 @@ The config also sets `ozmaDB.introspection.allowRawSql` to `true` for the `POST 
 default (`false`) the endpoint returns 403 (`raw SQL is disabled for this instance`). Raw SQL runs in a read-only
 transaction that is never committed, but it is still refused with 403 (`raw SQL is unavailable: database has
 dblink/postgres_fdw or a privileged role`) when the database has `dblink` or `postgres_fdw` installed, or the database
-role is a member of a superuser, replication, BYPASSRLS or `pg_*_server_files`/`pg_execute_server_program` role.
+role is a member of a superuser, replication, BYPASSRLS, `pg_*_server_files`, `pg_execute_server_program` or
+`pg_signal_backend` role.
 That is why the harness role created by `setup_db.sh` must stay a plain non-superuser owner. The tests that install
 these extensions or grant such a role connect as `postgres` and are skipped when that is not possible.
 Residual risk with raw SQL enabled: root can read anything the database role can, and call functions allowed in
 read-only mode, such as `pg_terminate_backend`/`pg_cancel_backend` on other sessions of the same role.
+
+The raw SQL response is capped at 16 MB of text, where every cell (NULL included) also counts as 16 characters;
+past the cap the result is truncated with a `result_too_large` error. json/jsonb values longer than 64 KB are not
+parsed: they are returned as strings, and their column gets `"jsonAsText": true`.
+
+## Dry run side effects
+
+`POST /introspection/dry_run` runs the operations, including triggers, inside the request transaction and rolls it
+back. Effects outside that transaction are disabled for the dry-run request: `OzmaDB.httpRequest` throws
+`HTTP requests are disabled during dry run`, `OzmaDB.writeEvent` and API error event logging are no-ops (they write
+on a separate connection). `OzmaDB.writeEventSync` and `OzmaDB.enqueueHttpRequest` insert into the request
+transaction, so they are rolled back with it. `test_dry_run_disables_trigger_side_effects` covers this.
+
+`GET /introspection/schema/{schema}/{entity}` returns computed fields and check constraints with `expression` set to
+the stored source text and `resolvedExpression` to the resolved rendering. Broken computed fields (`allow_broken`)
+are listed too, with `isBroken: true`, `error` and `resolvedExpression: null`.
