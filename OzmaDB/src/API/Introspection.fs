@@ -138,7 +138,12 @@ let private entityDetails (ref: ResolvedEntityRef) (entity: ResolvedEntity) : En
 
     { Name = string ref.Name
       Parent = entity.Parent |> Option.map entityRefString
-      Children = entity.Children |> Map.keys |> Seq.map entityRefString |> sortedNames
+      Children =
+        entity.Children
+        |> Map.toSeq
+        |> Seq.filter (fun (_, c) -> c.Direct)
+        |> Seq.map (fst >> entityRefString)
+        |> sortedNames
       MainField = string entity.MainField
       ColumnFields = entity.ColumnFields |> Map.toSeq |> Seq.map columnField |> Seq.toArray
       ComputedFields =

@@ -67,9 +67,14 @@ def test_schema(api):
     child_id = entity("child", parent_id=parent_id)
     column(child_id, "extra", "string")
 
+    grandchild_id = entity("grandchild", parent_id=child_id)
+    insert(api, "public", "computed_fields", {"entity_id": parent_id, "name": "double_amount", "expression": "amount * 2"})
+    insert(api, "public", "check_constraints", {"entity_id": parent_id, "name": "amount_non_negative", "expression": "amount >= 0"})
+
     orders_id = entity("orders")
     column(orders_id, "parent_ref", f"reference({TEST_SCHEMA}.parent)")
     column(orders_id, "total", "decimal")
+    insert(api, "public", "unique_constraints", {"entity_id": orders_id, "name": "unique_parent_ref", "columns": ["parent_ref"]})
 
     yield TEST_SCHEMA
 
