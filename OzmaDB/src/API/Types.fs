@@ -1131,6 +1131,9 @@ type SearchMatch =
       Name: string
       [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
       Entity: string option
+      // Rule part ("select", "update", "delete", "check") for role rules.
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      Part: string option
       Line: int
       Column: int
       Excerpt: string }

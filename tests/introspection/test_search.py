@@ -45,7 +45,7 @@ def test_search_plain_all_occurrences(api, test_schema):
     ]
     assert items[0]["schema"] == "mcp_test"
     assert items[0]["entity"] is None
-    assert items[0]["excerpt"] == "const zzmarker = 1;"
+    assert items[0]["excerpt"] == "  const zzmarker = 1;"
 
 
 def test_search_case_sensitivity(api, test_schema):
@@ -120,3 +120,35 @@ def test_search_regex_timeout(api, test_schema):
     assert body["ok"] is False
     assert body["errors"][0]["kind"] == "regex_timeout"
     assert elapsed < 5
+
+
+def test_search_user_view_matches_stored_text(api, test_schema):
+    query = f"select\n    amount   as   zzview_amount\nfrom {SEARCH_SCHEMA}.parent"
+    insert(api, "public", "user_views", {"schema_id": schema_id(api), "name": "formatted_view", "query": query})
+    items = matches(api, "zzview_amount", kinds="user_views")
+    assert [(m["name"], m["line"], m["column"], m["excerpt"], m["part"]) for m in items] == [
+        ("formatted_view", 2, 19, "    amount   as   zzview_amount", None)
+    ]
+
+
+def test_search_role_rule_part(api, test_schema):
+    items = [m for m in matches(api, "amount", kinds="role_rules") if m["name"] == "mcp_test_role"]
+    assert [(m["part"], m["entity"], m["excerpt"]) for m in items] == [("select", "mcp_test.parent", "amount > 0")]
+    assert all(m["part"] is None for m in matches(api, "amount", kinds="actions"))
+
+
+def test_search_long_line_excerpt_window(api, test_schema):
+    body = "  // " + "x" * 400 + "zzlong" + "y" * 400
+    insert(
+        api,
+        "public",
+        "actions",
+        {
+            "schema_id": schema_id(api),
+            "name": "long_line",
+            "function": "export default async function handler(args) {\n" + body + "\n  return 1;\n}\n",
+        },
+    )
+    (m,) = matches(api, "zzlong", kinds="actions")
+    assert "zzlong" in m["excerpt"] and len(m["excerpt"]) == 240
+    assert m["column"] == body.index("zzlong") + 1

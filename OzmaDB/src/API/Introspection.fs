@@ -25,6 +25,9 @@ module DryRun = OzmaDB.UserViews.DryRun
 module ActionsSchema = OzmaDB.Actions.Schema
 module TriggersSchema = OzmaDB.Triggers.Schema
 module ModulesSchema = OzmaDB.Modules.Schema
+module LayoutSchema = OzmaDB.Layout.Schema
+module UserViewsSchema = OzmaDB.UserViews.Schema
+module PermissionsSchema = OzmaDB.Permissions.Schema
 
 // Matches both position formats produced by `OzmaDB.Parsing.parse`.
 let private parsePositionRegex =
@@ -415,116 +418,93 @@ let private sortDependencies (items: DependencyItem seq) : DependencyItem[] =
     |> Seq.sortBy (fun i -> (i.Kind, i.Schema, i.Name, dependencyLine i, i.Detail, i.Entity))
     |> Seq.toArray
 
-// Original texts are not kept by the layout, so these sources are pretty-printed expressions.
 let private searchSourcesCache = ConditionalWeakTable<Layout, JSSource[]>()
 
-let private buildMetadataSources
-    (layout: Layout)
-    (userViews: DryRun.PrefetchedUserViews)
-    (permissions: PermissionsTypes.Permissions)
-    : JSSource[] =
-    let source kind (schemaName: SchemaName) name entity text =
-        { Item =
-            { Kind = kind
-              Schema = string schemaName
-              Name = name
-              Entity = entity
-              Detail = None
-              Confidence = "resolved" }
-          Source = text }
+// Stored source texts of metadata objects, so match positions can be used to patch them.
+let private loadMetadataSources (ctx: IContext) : Task<JSSource[]> =
+    task {
+        let system = ctx.Transaction.System
+        let! layout = LayoutSchema.buildSchemaLayout system None ctx.CancellationToken
+        let! userViews = UserViewsSchema.buildSchemaUserViews system None ctx.CancellationToken
+        let! permissions = PermissionsSchema.buildSchemaPermissions system None ctx.CancellationToken
 
-    let layoutSources =
-        seq {
-            for KeyValue(schemaName, schema) in layout.Schemas do
-                for KeyValue(entityName, entity) in schema.Entities do
-                    let entityRef =
-                        { Schema = schemaName
-                          Name = entityName }
+        let source kind (schemaName: SchemaName) name entity part text =
+            { Item =
+                { Kind = kind
+                  Schema = string schemaName
+                  Name = name
+                  Entity = entity
+                  Detail = part
+                  Confidence = "resolved" }
+              Source = text }
 
-                    let entityStr = Some(entityRefString entityRef)
+        let layoutSources =
+            seq {
+                for KeyValue(schemaName, schema) in layout.Schemas do
+                    for KeyValue(entityName, entity) in schema.Entities do
+                        let entityStr =
+                            Some(
+                                entityRefString
+                                    { Schema = schemaName
+                                      Name = entityName }
+                            )
 
-                    for KeyValue(fieldName, field) in entity.ComputedFields do
-                        match field with
-                        | Ok comp when Option.isNone comp.InheritedFrom ->
+                        for KeyValue(fieldName, field) in entity.ComputedFields do
                             yield
                                 source
                                     "computed_field"
                                     schemaName
                                     (sprintf "%s.%s" (string entityName) (string fieldName))
                                     entityStr
-                                    (comp.Expression.ToOzmaQLString())
-                        | _ -> ()
+                                    None
+                                    field.Expression
 
-                    for KeyValue(constrName, constr) in entity.CheckConstraints do
-                        yield
-                            source
-                                "check_constraint"
-                                schemaName
-                                (string constrName)
-                                entityStr
-                                (constr.Expression.ToOzmaQLString())
-        }
-
-    let viewSources =
-        seq {
-            for KeyValue(schemaName, viewsSchema) in userViews.Schemas do
-                match viewsSchema with
-                | Error _ -> ()
-                | Ok viewsSchema ->
-                    for KeyValue(viewName, view) in viewsSchema.UserViews do
-                        match view with
-                        | Error _ -> ()
-                        | Ok pref ->
+                        for KeyValue(constrName, constr) in entity.CheckConstraints do
                             yield
                                 source
-                                    "user_view"
+                                    "check_constraint"
                                     schemaName
-                                    (string viewName)
+                                    (string constrName)
+                                    entityStr
                                     None
-                                    (pref.UserView.Resolved.ToOzmaQLString())
-        }
+                                    constr.Expression
+            }
 
-    let ruleSources =
-        seq {
-            for KeyValue(schemaName, permissionsSchema) in permissions.Schemas do
-                for KeyValue(roleName, role) in permissionsSchema.Roles do
-                    match role with
-                    | Error _ -> ()
-                    | Ok role ->
+        let viewSources =
+            seq {
+                for KeyValue(schemaName, schema) in userViews.Schemas do
+                    for KeyValue(viewName, view) in schema.UserViews do
+                        yield source "user_view" schemaName (string viewName) None None view.Query
+            }
+
+        let ruleSources =
+            seq {
+                for KeyValue(schemaName, schema) in permissions.Schemas do
+                    for KeyValue(roleName, role) in schema.Roles do
                         for KeyValue(allowedSchemaName, allowedSchema) in role.Permissions.Schemas do
-                            for KeyValue(allowedEntityName, allowedEntity) in allowedSchema.Entities do
-                                match allowedEntity with
-                                | Error _ -> ()
-                                | Ok allowedEntity ->
-                                    let entityRef =
-                                        { Schema = allowedSchemaName
-                                          Name = allowedEntityName }
+                            for KeyValue(allowedEntityName, allowed) in allowedSchema.Entities do
+                                let entityStr =
+                                    Some(
+                                        entityRefString
+                                            { Schema = allowedSchemaName
+                                              Name = allowedEntityName }
+                                    )
 
-                                    let rules =
-                                        [ ("select", Some allowedEntity.Select)
-                                          ("update", Some allowedEntity.Update)
-                                          ("delete", Result.getOption allowedEntity.Delete)
-                                          ("check", Some allowedEntity.Check) ]
+                                let parts =
+                                    [ ("select", allowed.Select)
+                                      ("update", allowed.Update)
+                                      ("delete", allowed.Delete)
+                                      ("check", allowed.Check) ]
 
-                                    let lines =
-                                        rules
-                                        |> List.choose (fun (kind, expr) ->
-                                            match expr with
-                                            | Some OFEFalse
-                                            | None -> None
-                                            | Some expr -> Some(sprintf "%s: %s" kind (expr.ToOzmaQLString())))
+                                for (part, text) in parts do
+                                    match text with
+                                    | Some text ->
+                                        yield source "role_rule" schemaName (string roleName) entityStr (Some part) text
+                                    | None -> ()
+            }
 
-                                    if not (List.isEmpty lines) then
-                                        yield
-                                            source
-                                                "role_rule"
-                                                schemaName
-                                                (string roleName)
-                                                (Some(entityRefString entityRef))
-                                                (String.concat "\n" lines)
-        }
-
-    Seq.concat [ layoutSources; viewSources; ruleSources ] |> Seq.toArray
+        return Seq.concat [ layoutSources; viewSources; ruleSources ] |> Seq.toArray
+    }
 
 let private maxExcerptLength = 240
 let private regexTimeout = TimeSpan.FromMilliseconds 500.0
@@ -591,19 +571,31 @@ let private sourceMatches (regex: Regex option) (req: SearchRequest) (src: JSSou
                 else
                     text.Length
 
-            let line = text.Substring(lineStart, lineEnd - lineStart).TrimEnd('\r').Trim()
+            let line = text.Substring(lineStart, lineEnd - lineStart).TrimEnd('\r')
+            let col = index - lineStart
+
+            // Long lines are windowed around the match; the column still refers to the full stored line.
+            let excerpt =
+                if line.Length <= maxExcerptLength then
+                    line
+                else
+                    let start =
+                        max 0 (min (col - maxExcerptLength / 4) (line.Length - maxExcerptLength))
+
+                    line.Substring(start, maxExcerptLength)
 
             { Kind = src.Item.Kind
               Schema = src.Item.Schema
               Name = src.Item.Name
               Entity = src.Item.Entity
+              Part =
+                (if src.Item.Kind = "role_rule" then
+                     src.Item.Detail
+                 else
+                     None)
               Line = lineIdx + 1
-              Column = index - lineStart + 1
-              Excerpt =
-                if line.Length > maxExcerptLength then
-                    line.Substring(0, maxExcerptLength)
-                else
-                    line })
+              Column = col + 1
+              Excerpt = excerpt })
 
 type IntrospectionAPI(api: IOzmaDBAPI) =
     let rctx = api.Request
@@ -714,13 +706,15 @@ type IntrospectionAPI(api: IOzmaDBAPI) =
         task {
             let! index = this.GetIndex()
 
-            let metadata =
-                match searchSourcesCache.TryGetValue ctx.Layout with
-                | (true, sources) -> sources
-                | (false, _) ->
-                    let sources = buildMetadataSources ctx.Layout ctx.UserViews ctx.Permissions
-                    searchSourcesCache.AddOrUpdate(ctx.Layout, sources)
-                    sources
+            let! metadata =
+                task {
+                    match searchSourcesCache.TryGetValue ctx.Layout with
+                    | (true, sources) -> return sources
+                    | (false, _) ->
+                        let! sources = loadMetadataSources ctx
+                        searchSourcesCache.AddOrUpdate(ctx.Layout, sources)
+                        return sources
+                }
 
             let kinds = req.Kinds |> Array.map (fun k -> Map.find k searchKinds) |> Set.ofArray
 
@@ -765,7 +759,7 @@ type IntrospectionAPI(api: IOzmaDBAPI) =
 
                 let sorted =
                     found
-                    |> Seq.sortBy (fun m -> (m.Kind, m.Schema, m.Name, m.Line, m.Column))
+                    |> Seq.sortBy (fun m -> (m.Kind, m.Schema, m.Name, m.Part, m.Line, m.Column))
                     |> Seq.toArray
 
                 return
