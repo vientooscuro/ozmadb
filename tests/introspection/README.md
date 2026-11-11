@@ -22,23 +22,22 @@ These tests exercise the root-only `/introspection/*` endpoints against a locall
 Start OzmaDB with the test config (listens on `http://127.0.0.1:5099`, security disabled):
 
 ```sh
-dotnet run --project OzmaDB -- dev/config.introspection-test.json
+tests/introspection/run_server.sh --background
 ```
 
-The project is pinned to a self-contained `linux-x64` build. On other hosts (e.g. macOS arm64) build a
-framework-dependent copy instead, revert the lock files it rewrites, and put the matching
-`ClearScriptV8.<rid>` native library (from the `Microsoft.ClearScript.V8.Native.<rid>` package) next to the binary:
+The project itself is pinned to a self-contained `linux-x64` build, so `dotnet run` does not work on other hosts.
+The script detects the host RID (`osx-arm64`, `osx-x64`, `linux-x64`) and builds a framework-dependent copy into
+`tests/introspection/.server/` (gitignored). That build rewrites `OzmaDB/packages.lock.json`,
+`OzmaDBSchema/packages.lock.json` and `OzmaUtils/packages.lock.json`; the script restores them afterwards.
+On macOS it also downloads `microsoft.clearscript.v8.native.<rid>` from nuget.org, pinned to the ClearScript V8
+version resolved in `OzmaDB/packages.lock.json`, and puts the native library next to the binary (cached after the
+first run). Without `--background` the server runs in the foreground; `--stop` stops a background server.
 
-```sh
-dotnet build OzmaDB/OzmaDB.fsproj -r osx-arm64 -p:SelfContained=false -p:PublishReadyToRun=false -o /path/to/out
-git checkout -- '*/packages.lock.json'
-/path/to/out/OzmaDB dev/config.introspection-test.json
-```
-
-Then, in another shell:
+Then run the tests and stop the server:
 
 ```sh
 tests/introspection/.venv/bin/pytest tests/introspection
+tests/introspection/run_server.sh --stop
 ```
 
 Set `OZMADB_TEST_URL` to target another server. The suite is skipped if the server is unreachable.

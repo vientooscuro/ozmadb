@@ -26,5 +26,6 @@ out/
 
 # Python test harness
 tests/introspection/.venv/
+tests/introspection/.server/
 .pytest_cache/
 __pycache__/
