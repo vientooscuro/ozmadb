@@ -27,6 +27,7 @@ type IntrospectionErrorInfo =
     | [<CaseKey("fieldNotFound")>] IEFieldNotFound of Field: string
     | [<CaseKey("fullDryRunDisabled")>] IEFullDryRunDisabled
     | [<CaseKey("rawSqlDisabled")>] IERawSqlDisabled
+    | [<CaseKey("rawSqlUnavailable")>] IERawSqlUnavailable
     | [<CaseKey("reportNotFound")>] IEReportNotFound of Report: string
 
     member this.LogMessage =
@@ -36,6 +37,7 @@ type IntrospectionErrorInfo =
         | IEFieldNotFound field -> sprintf "Field not found: %s" field
         | IEFullDryRunDisabled -> "full dry-run is disabled for this instance"
         | IERawSqlDisabled -> "raw SQL is disabled for this instance"
+        | IERawSqlUnavailable -> "raw SQL is unavailable: database has dblink/postgres_fdw or a privileged role"
         | IEReportNotFound report -> sprintf "Report not found: %s" report
 
     [<DataMember>]
@@ -51,6 +53,7 @@ type IntrospectionErrorInfo =
         | IEFieldNotFound _ -> 404
         | IEFullDryRunDisabled -> 403
         | IERawSqlDisabled -> 403
+        | IERawSqlUnavailable -> 403
         | IEReportNotFound _ -> 404
 
     static member private LookupKey = prepareLookupCaseKey<IntrospectionErrorInfo>
@@ -103,7 +106,10 @@ type SqlHTTPRequest =
 type IntrospectionSettings =
     { // A full dry run holds the migration locks and locks on altered tables while it runs.
       AllowFullDryRun: bool
-      // Read-only, but still lets root read any table and run any function the database user can.
+      // Runs in a read-only transaction that is never committed, and is refused when the database has
+      // dblink/postgres_fdw or the database role is privileged. Still, root can read anything the role can and
+      // call side-effecting functions allowed in read-only mode, e.g. pg_terminate_backend/pg_cancel_backend on
+      // other sessions of the same role.
       AllowRawSql: bool }
 
 let readIntrospectionSettings (config: IConfiguration) : IntrospectionSettings =
@@ -400,8 +406,9 @@ let introspectionApi (serviceProvider: IServiceProvider) : Endpoint list =
                         | Ok req ->
                             task {
                                 // Nothing is committed: the request transaction is rolled back when the job ends.
-                                let! ret = api.Introspection.RunSql req
-                                return jobJson ret
+                                match! api.Introspection.RunSql req with
+                                | Ok ret -> return jobJson ret
+                                | Error RSEUnsafeDatabase -> return jobError IERawSqlUnavailable
                             }
 
     let pgReport (name: string) : HttpHandler =

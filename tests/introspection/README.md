@@ -47,3 +47,13 @@ The `test_schema` fixture creates the `mcp_test` schema and removes it on teardo
 dry-run tests can run. With the default (`false`), `POST /introspection/dry_run` with `mode: "full"` returns 403
 (`full dry-run is disabled for this instance`); that path is not covered by the suite because it needs a server
 started with a different config.
+
+The config also sets `ozmaDB.introspection.allowRawSql` to `true` for the `POST /introspection/sql` tests. With the
+default (`false`) the endpoint returns 403 (`raw SQL is disabled for this instance`). Raw SQL runs in a read-only
+transaction that is never committed, but it is still refused with 403 (`raw SQL is unavailable: database has
+dblink/postgres_fdw or a privileged role`) when the database has `dblink` or `postgres_fdw` installed, or the database
+role is a member of a superuser, replication, BYPASSRLS or `pg_*_server_files`/`pg_execute_server_program` role.
+That is why the harness role created by `setup_db.sh` must stay a plain non-superuser owner. The tests that install
+these extensions or grant such a role connect as `postgres` and are skipped when that is not possible.
+Residual risk with raw SQL enabled: root can read anything the database role can, and call functions allowed in
+read-only mode, such as `pg_terminate_backend`/`pg_cancel_backend` on other sessions of the same role.

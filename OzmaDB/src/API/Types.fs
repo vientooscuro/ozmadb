@@ -1015,6 +1015,7 @@ type ValidateErrorKind =
     | [<CaseKey("read_only")>] VEKReadOnly
     | [<CaseKey("sql")>] VEKSql
     | [<CaseKey("extension_missing")>] VEKExtensionMissing
+    | [<CaseKey("result_too_large")>] VEKResultTooLarge
 
 type ValidateErrorItem =
     { Message: string
@@ -1201,6 +1202,10 @@ type SqlQueryResult =
       Rows: JToken[][]
       Truncated: bool }
 
+type RunSqlError =
+    // dblink/postgres_fdw open separate read-write connections, and privileged roles can bypass read-only.
+    | RSEUnsafeDatabase
+
 type IIntrospectionAPI =
     abstract member ValidateQuery: ValidateQueryRequest -> Task<ValidateResult>
     abstract member GetSchemas: unit -> Task<SchemaSummary[]>
@@ -1211,7 +1216,7 @@ type IIntrospectionAPI =
 
     abstract member Search: SearchRequest -> Task<SearchResult>
     abstract member CheckCode: CodeCheckRequest -> Task<CodeCheckResult>
-    abstract member RunSql: SqlQueryRequest -> Task<SqlQueryResult>
+    abstract member RunSql: SqlQueryRequest -> Task<Result<SqlQueryResult, RunSqlError>>
     // `None` for an unknown report.
     abstract member PgReport: string -> Task<SqlQueryResult option>
 

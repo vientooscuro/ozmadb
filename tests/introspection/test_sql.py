@@ -1,4 +1,7 @@
 import base64
+import os
+import shutil
+import subprocess
 import time
 from datetime import datetime, timezone
 
@@ -191,6 +194,69 @@ def test_sql_max_rows_truncates(api):
     assert ret["truncated"] is False
 
 
+def test_sql_result_size_capped(api):
+    start = time.monotonic()
+    ret = run_sql(api, "select repeat('x', 2000000) as v from generate_series(1, 20)", timeoutMs=30000)
+    assert time.monotonic() - start < 15
+    assert ret["ok"] is True, ret["errors"]
+    assert ret["truncated"] is True
+    assert [e["kind"] for e in ret["errors"]] == ["result_too_large"]
+    assert 0 < len(ret["rows"]) < 20
+    for (value,) in ret["rows"]:
+        assert value.endswith("…[truncated]")
+        assert len(value) <= 1024 * 1024 + len("…[truncated]")
+    assert sum(len(v) for (v,) in ret["rows"]) <= 17 * 1024 * 1024
+
+
+def test_sql_deep_json_falls_back_to_text(api):
+    ret = run_sql(api, "select repeat('[', 100) || repeat(']', 100) as j")
+    assert ret["ok"] is True, ret
+    ret = run_sql(api, "select (repeat('[', 100) || repeat(']', 100))::jsonb as j")
+    assert ret["ok"] is True, ret
+    assert ret["rows"] == [["[" * 100 + "]" * 100]]
+
+
+def superuser_psql(query: str) -> None:
+    if shutil.which("psql") is None:
+        pytest.skip("psql is required")
+    db = "ozmadb_introspection_test"
+    out = subprocess.run(
+        ["psql", "-h", "localhost", "-p", "5432", "-U", "postgres", "-d", db, "-v", "ON_ERROR_STOP=1", "-Atc", query],
+        env={**os.environ},
+        capture_output=True,
+        text=True,
+    )
+    if out.returncode != 0:
+        pytest.skip(f"cannot run psql as postgres: {out.stderr.strip()}")
+
+
+@pytest.mark.parametrize("extension", ["dblink", "postgres_fdw"])
+def test_sql_unavailable_with_cross_connection_extension(api, extension):
+    superuser_psql(f"create extension if not exists {extension}")
+    try:
+        resp = api.post("/introspection/sql", json={"sql": "select 1"})
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["message"] == "raw SQL is unavailable: database has dblink/postgres_fdw or a privileged role"
+        # Canned reports stay available.
+        assert pg_report(api, "activity")["ok"] is True
+    finally:
+        superuser_psql(f"drop extension if exists {extension}")
+    assert run_sql(api, "select 1")["ok"] is True
+
+
+def test_sql_unavailable_for_member_of_privileged_role(api):
+    superuser_psql(
+        "drop role if exists mcp_sql_bypass; create role mcp_sql_bypass nologin bypassrls; "
+        "grant mcp_sql_bypass to ozmadb_introspection_test"
+    )
+    try:
+        resp = api.post("/introspection/sql", json={"sql": "select 1"})
+        assert resp.status_code == 403, resp.text
+    finally:
+        superuser_psql("drop role if exists mcp_sql_bypass")
+    assert run_sql(api, "select 1")["ok"] is True
+
+
 def pg_report(api, name: str) -> dict:
     resp = api.get(f"/introspection/pg/{name}")
     assert resp.status_code == 200, resp.text
@@ -205,6 +271,18 @@ def test_pg_table_sizes_lists_test_tables(api, test_schema):
     tables = {(row[0], row[1]) for row in ret["rows"]}
     assert (test_schema, "parent") in tables
     assert not any(schema in ("pg_catalog", "information_schema") for schema, _ in tables)
+
+
+def test_pg_locks_only_current_database(api):
+    ret = pg_report(api, "locks")
+    assert ret["ok"] is True, ret
+    names = [c["name"] for c in ret["columns"]]
+    assert "datname" in names
+    [[current]] = run_sql(api, "select current_database()")["rows"]
+    datnames = [row[names.index("datname")] for row in ret["rows"]]
+    # The request itself holds locks, so the report is never empty.
+    assert datnames
+    assert set(datnames) == {current}
 
 
 @pytest.mark.parametrize("name", ["locks", "activity", "indexes_unused"])

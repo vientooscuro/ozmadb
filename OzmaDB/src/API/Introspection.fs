@@ -3,7 +3,9 @@ module OzmaDB.API.Introspection
 open System
 open System.Collections.Generic
 open System.Runtime.CompilerServices
+open System.Data
 open System.IO
+open System.Text
 open System.Text.RegularExpressions
 open System.Threading.Tasks
 open Newtonsoft.Json
@@ -605,6 +607,20 @@ let private sourceMatches (regex: Regex option) (req: SearchRequest) (src: JSSou
 
 let private sqlWrapperPrefix = "SELECT * FROM ("
 
+// Text read from PostgreSQL, in characters: per value and per response.
+let private maxSqlValueLength = 1024 * 1024
+let private maxSqlResultLength = 16 * 1024 * 1024
+let private truncatedValueMarker = "…[truncated]"
+
+// Membership, not just inheritance: `set_config('role', ...)` can switch to any role the user is a member of.
+let private unsafeDatabaseQuery =
+    """SELECT EXISTS (SELECT FROM pg_extension WHERE extname IN ('dblink', 'postgres_fdw'))
+OR EXISTS (
+  SELECT FROM pg_roles r
+  WHERE (r.rolsuper OR r.rolreplication OR r.rolbypassrls
+         OR r.rolname IN ('pg_read_server_files', 'pg_write_server_files', 'pg_execute_server_program'))
+    AND pg_has_role(current_user, r.oid, 'MEMBER'))"""
+
 let private pgReportTimeoutMs = 10000
 let private pgReportMaxRows = 5000
 
@@ -615,10 +631,11 @@ WHERE c.relkind IN ('r', 'p', 'm') AND n.nspname NOT IN ('pg_catalog', 'informat
 ORDER BY total_bytes DESC, 1, 2
 LIMIT 200"""
 
+// Only sessions of this database: cluster-wide locks (virtualxid, transactionid) would expose other databases' queries.
 let private locksReport =
-    """SELECT l.pid, l.locktype, l.mode, l.granted, l.relation::regclass::text AS relation, a.query, a.state, a.wait_event
-FROM pg_locks l LEFT JOIN pg_stat_activity a ON a.pid = l.pid
-WHERE l.database IS NULL OR l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+    """SELECT l.pid, a.datname, l.locktype, l.mode, l.granted, l.relation::regclass::text AS relation, a.query, a.state, a.wait_event
+FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+WHERE a.datname = current_database()
 ORDER BY l.granted, l.pid
 LIMIT 1000"""
 
@@ -696,7 +713,7 @@ let private parseJsonValue (text: string) : JToken =
     use reader = new JsonTextReader(new StringReader(text))
     reader.DateParseHandling <- DateParseHandling.None
     reader.FloatParseHandling <- FloatParseHandling.Decimal
-    reader.MaxDepth <- Nullable()
+    reader.MaxDepth <- Nullable(64)
     JToken.ReadFrom reader
 
 // Values are read in PostgreSQL text format (with `DateStyle = ISO`), so every type is readable.
@@ -767,6 +784,7 @@ let private runWrappedQuery (ctx: IContext) (query: string) (pars: SqlParam[]) (
             sprintf "%s%s\n) AS __q LIMIT $%i" sqlWrapperPrefix query (Array.length pars + 1)
 
         use command = new NpgsqlCommand(commandText, ctx.Transaction.Connection.Connection)
+        let buffer = Array.zeroCreate<char> 8192
         command.AllResultTypesAreUnknown <- true
 
         for par in pars do
@@ -776,15 +794,37 @@ let private runWrappedQuery (ctx: IContext) (query: string) (pars: SqlParam[]) (
         <| command.Parameters.Add(NpgsqlParameter(Value = int64 maxRows + 1L, NpgsqlDbType = NpgsqlDbType.Bigint))
 
         try
-            use! reader = command.ExecuteReaderAsync(ctx.CancellationToken)
+            // Sequential access streams values instead of buffering whole rows, so huge values are never held in memory.
+            use! reader = command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, ctx.CancellationToken)
 
             let columns =
                 Array.init reader.FieldCount (fun i ->
                     { Name = reader.GetName i
                       PgType = reader.GetDataTypeName i })
 
+            // Reads at most `maxSqlValueLength + 1` characters; the rest of the value is skipped by the reader.
+            let readText (i: int) : Task<string * bool> =
+                task {
+                    use textReader = reader.GetTextReader i
+                    let text = StringBuilder()
+                    let mutable finished = false
+
+                    while not finished do
+                        let toRead = min buffer.Length (maxSqlValueLength + 1 - text.Length)
+                        let! read = textReader.ReadBlockAsync(buffer, 0, toRead)
+                        ignore <| text.Append(buffer, 0, read)
+                        finished <- read < toRead || text.Length > maxSqlValueLength
+
+                    if text.Length > maxSqlValueLength then
+                        return (text.ToString(0, maxSqlValueLength), true)
+                    else
+                        return (text.ToString(), false)
+                }
+
             let rows = List<JToken[]>()
+            let mutable totalLength = 0L
             let mutable truncated = false
+            let mutable tooLarge = false
             let mutable reading = true
 
             while reading do
@@ -796,17 +836,45 @@ let private runWrappedQuery (ctx: IContext) (query: string) (pars: SqlParam[]) (
                     truncated <- true
                     reading <- false
                 else
-                    let getValue i =
-                        if reader.IsDBNull i then
-                            JValue.CreateNull() :> JToken
-                        else
-                            sqlTextValue columns.[i].PgType (reader.GetString i)
+                    let row = Array.zeroCreate<JToken> columns.Length
+                    let mutable i = 0
 
-                    rows.Add(Array.init columns.Length getValue)
+                    while not tooLarge && i < columns.Length do
+                        let! isNull = reader.IsDBNullAsync(i, ctx.CancellationToken)
+
+                        if isNull then
+                            row.[i] <- JValue.CreateNull()
+                        else
+                            let! (text, cut) = readText i
+                            totalLength <- totalLength + int64 text.Length
+
+                            row.[i] <-
+                                if cut then
+                                    JValue(text + truncatedValueMarker) :> JToken
+                                else
+                                    sqlTextValue columns.[i].PgType text
+
+                        tooLarge <- totalLength > int64 maxSqlResultLength
+                        i <- i + 1
+
+                    // A row crossing the response limit is dropped as a whole.
+                    if tooLarge then
+                        truncated <- true
+                        reading <- false
+                    else
+                        rows.Add row
 
             return
                 { Ok = true
-                  Errors = [||]
+                  Errors =
+                    if tooLarge then
+                        [| { Message = sprintf "Result exceeds %i characters, the rest is omitted" maxSqlResultLength
+                             Kind = VEKResultTooLarge
+                             Line = None
+                             Column = None
+                             Path = None } |]
+                    else
+                        [||]
                   Columns = columns
                   Rows = rows.ToArray()
                   Truncated = truncated }
@@ -1016,10 +1084,18 @@ type IntrospectionAPI(api: IOzmaDBAPI) =
                       Warnings = [||] }
         }
 
-    member this.RunSql(req: SqlQueryRequest) : Task<SqlQueryResult> =
+    member this.RunSql(req: SqlQueryRequest) : Task<Result<SqlQueryResult, RunSqlError>> =
         task {
             do! enterReadOnly ctx req.TimeoutMs
-            return! runWrappedQuery ctx req.Sql req.Params req.MaxRows
+
+            let! unsafeDatabase =
+                ctx.Transaction.Connection.Query.ExecuteValueQuery unsafeDatabaseQuery Map.empty ctx.CancellationToken
+
+            match unsafeDatabase with
+            | Some(_, _, OzmaDB.SQL.AST.VBool false) ->
+                let! ret = runWrappedQuery ctx req.Sql req.Params req.MaxRows
+                return Ok ret
+            | _ -> return Error RSEUnsafeDatabase
         }
 
     member this.PgReport(name: string) : Task<SqlQueryResult option> =
