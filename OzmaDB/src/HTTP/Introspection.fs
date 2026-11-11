@@ -4,6 +4,7 @@ open System
 open System.Runtime.Serialization
 open System.Threading.Tasks
 open Giraffe
+open Microsoft.AspNetCore.Http
 open Giraffe.EndpointRouting
 open Microsoft.Extensions.DependencyInjection
 
@@ -18,11 +19,13 @@ open OzmaDB.HTTP.Utils
 type IntrospectionErrorInfo =
     | [<CaseKey("accessDenied")>] IEAccessDenied
     | [<CaseKey("entityNotFound")>] IEEntityNotFound of Entity: string
+    | [<CaseKey("fieldNotFound")>] IEFieldNotFound of Field: string
 
     member this.LogMessage =
         match this with
         | IEAccessDenied -> "Introspection is available only to root"
         | IEEntityNotFound entity -> sprintf "Entity not found: %s" entity
+        | IEFieldNotFound field -> sprintf "Field not found: %s" field
 
     [<DataMember>]
     member this.Message = this.LogMessage
@@ -34,6 +37,7 @@ type IntrospectionErrorInfo =
         match this with
         | IEAccessDenied -> 403
         | IEEntityNotFound _ -> 404
+        | IEFieldNotFound _ -> 404
 
     static member private LookupKey = prepareLookupCaseKey<IntrospectionErrorInfo>
     member this.Error = IntrospectionErrorInfo.LookupKey this |> Option.get
@@ -53,7 +57,7 @@ type CapabilitiesResponse = { Version: int; Features: string[] }
 
 let private capabilities =
     { Version = 1
-      Features = [| "validate"; "schema" |] }
+      Features = [| "validate"; "schema"; "dependencies" |] }
 
 let private requireRoot (api: IOzmaDBAPI) (f: unit -> Task<HttpJobResponse>) : Task<HttpJobResponse> =
     match api.Request.User.Effective.Type with
@@ -104,9 +108,36 @@ let introspectionApi (serviceProvider: IServiceProvider) : Endpoint list =
                     | None -> return jobError (IEEntityNotFound(string ref))
                 }
 
+    let getDependencies (next: HttpFunc) (ctx: HttpContext) =
+        match ctx.TryGetQueryStringValue "schema", ctx.TryGetQueryStringValue "entity" with
+        | Some schema, Some entity ->
+            let ref =
+                { Schema = OzmaQLName schema
+                  Name = OzmaQLName entity }
+
+            let field = ctx.TryGetQueryStringValue "field" |> Option.map OzmaQLName
+
+            let handler =
+                utils.PerformReadJob
+                <| fun api ->
+                    requireRoot api
+                    <| fun () ->
+                        task {
+                            match! api.Introspection.GetDependencies ref field with
+                            | Ok ret -> return jobJson ret
+                            | Error DEEntityNotFound -> return jobError (IEEntityNotFound(string ref))
+                            | Error DEFieldNotFound ->
+                                let fieldName = field |> Option.map string |> Option.defaultValue ""
+                                return jobError (IEFieldNotFound(sprintf "%O.%s" ref fieldName))
+                        }
+
+            handler next ctx
+        | _ -> requestError (RIRequest "Query parameters schema and entity are required") next ctx
+
     [ subRoute
           "/introspection"
           [ GET [ route "/capabilities" getCapabilities ]
             GET [ route "/schema" getSchemas ]
             GET [ routef "/schema/%s/%s" getEntity ]
+            GET [ route "/dependencies" getDependencies ]
             POST [ route "/funql/validate" validateQuery ] ] ]

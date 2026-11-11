@@ -29,6 +29,12 @@ type AllowedField =
       // Post-UPDATE/INSERT check expression, in addition to entity-wise check.
       Check: ResolvedOptimizedFieldExpr }
 
+type RestrictionKind =
+    | RKSelect
+    | RKUpdate
+    | RKDelete
+    | RKCheck
+
 // Each filter and check expression here is later multiplied (ANDed) by corresponding parent entity expressions (or empty allowed entity if parent entity is not in allowed, effectively rendering all filters FALSE).
 // Role may work even when broken, just with less access rights. Hence we split AllowBroken and exceptions in several fields.
 [<NoEquality; NoComparison>]
@@ -44,7 +50,9 @@ type AllowedEntity =
       Update: ResolvedOptimizedFieldExpr
       // Which entries are you allowed to DELETE? This is multiplied with SELECT later.
       Delete: Result<ResolvedOptimizedFieldExpr, exn>
-      Fields: Map<FieldName, AllowedField> }
+      Fields: Map<FieldName, AllowedField>
+      // References used by own entity and field restrictions, for introspection.
+      UsedDatabases: Map<RestrictionKind, UsedDatabase> }
 
 let allowedEntityIsHalfBroken (entity: AllowedEntity) =
     (Result.isError entity.Insert || Result.isError entity.Delete)
@@ -56,7 +64,8 @@ let emptyAllowedEntity: AllowedEntity =
       Select = OFEFalse
       Update = OFEFalse
       Delete = Ok OFEFalse
-      Fields = Map.empty }
+      Fields = Map.empty
+      UsedDatabases = Map.empty }
 
 [<NoEquality; NoComparison>]
 type AllowedSchema =

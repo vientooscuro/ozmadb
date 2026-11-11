@@ -1,5 +1,8 @@
 module OzmaDB.API.Introspection
 
+open System
+open System.Collections.Generic
+open System.Runtime.CompilerServices
 open System.Text.RegularExpressions
 open System.Threading.Tasks
 
@@ -13,6 +16,14 @@ open OzmaDB.Layout.Types
 open OzmaDB.UserViews.Types
 open OzmaDB.UserViews.Resolve
 open OzmaDB.API.Types
+
+type private MutableHashSet<'a> = System.Collections.Generic.HashSet<'a>
+
+module PermissionsTypes = OzmaDB.Permissions.Types
+module DryRun = OzmaDB.UserViews.DryRun
+module ActionsSchema = OzmaDB.Actions.Schema
+module TriggersSchema = OzmaDB.Triggers.Schema
+module ModulesSchema = OzmaDB.Modules.Schema
 
 // Matches both position formats produced by `OzmaDB.Parsing.parse`.
 let private parsePositionRegex =
@@ -181,6 +192,228 @@ let private entityDetails (ref: ResolvedEntityRef) (entity: ResolvedEntity) : En
             |> Option.map (fun target -> { Field = string name; Target = target }))
         |> Seq.toArray }
 
+[<NoEquality; NoComparison>]
+type private JSSource =
+    { Item: DependencyItem; Source: string }
+
+// Built once per layout and never mutated afterwards.
+[<NoEquality; NoComparison>]
+type private DependencyIndex =
+    { Fields: Dictionary<ResolvedFieldRef, MutableHashSet<DependencyItem>>
+      Entities: Dictionary<ResolvedEntityRef, MutableHashSet<DependencyItem>>
+      JSSources: JSSource[] }
+
+// Every state version change produces a new layout, so the layout instance identifies the indexed state.
+let private dependencyIndexes = ConditionalWeakTable<Layout, DependencyIndex>()
+
+let private restrictionKindString =
+    function
+    | PermissionsTypes.RKSelect -> "select"
+    | PermissionsTypes.RKUpdate -> "update"
+    | PermissionsTypes.RKDelete -> "delete"
+    | PermissionsTypes.RKCheck -> "check"
+
+// Field references through a child entity are attributed to the entity that declares the field.
+let private declaringEntity (layout: Layout) (entityRef: ResolvedEntityRef) (fieldName: FieldName) =
+    match layout.FindEntity entityRef with
+    | None -> entityRef
+    | Some entity when fieldName = funId || fieldName = funSubEntity -> entity.Root
+    | Some entity ->
+        match Map.tryFind fieldName entity.ColumnFields with
+        | Some col -> Option.defaultValue entityRef col.InheritedFrom
+        | None ->
+            match Map.tryFind fieldName entity.ComputedFields with
+            | Some(Ok comp) -> Option.defaultValue entityRef comp.InheritedFrom
+            | _ -> entityRef
+
+let private resolvedItem (kind: string) (schema: SchemaName) (name: string) (entity: ResolvedEntityRef option) =
+    { Kind = kind
+      Schema = string schema
+      Name = name
+      Entity = entity |> Option.map entityRefString
+      Detail = None
+      Confidence = "resolved" }
+
+let private buildDependencyIndex
+    (layout: Layout)
+    (userViews: DryRun.PrefetchedUserViews)
+    (permissions: PermissionsTypes.Permissions)
+    (jsSources: JSSource[])
+    : DependencyIndex =
+    let fields = Dictionary<ResolvedFieldRef, MutableHashSet<DependencyItem>>()
+    let entities = Dictionary<ResolvedEntityRef, MutableHashSet<DependencyItem>>()
+
+    let addTo (dict: Dictionary<'k, MutableHashSet<DependencyItem>>) (key: 'k) (item: DependencyItem) =
+        match dict.TryGetValue key with
+        | (true, items) -> ignore <| items.Add item
+        | (false, _) ->
+            let items = MutableHashSet<DependencyItem>()
+            ignore <| items.Add item
+            dict.[key] <- items
+
+    let addField (entityRef: ResolvedEntityRef) (fieldName: FieldName) (item: DependencyItem) =
+        let declRef = declaringEntity layout entityRef fieldName
+        addTo fields { Entity = declRef; Name = fieldName } item
+        addTo entities declRef item
+
+    let addUsed (item: DependencyItem) (used: UsedDatabase) =
+        for KeyValue(schemaName, usedSchema) in used.Schemas do
+            for KeyValue(entityName, usedEntity) in usedSchema.Entities do
+                let entityRef =
+                    { Schema = schemaName
+                      Name = entityName }
+
+                addTo entities entityRef item
+
+                for KeyValue(fieldName, _) in usedEntity.Fields do
+                    addField entityRef fieldName item
+
+    for KeyValue(schemaName, schema) in layout.Schemas do
+        for KeyValue(entityName, entity) in schema.Entities do
+            let entityRef =
+                { Schema = schemaName
+                  Name = entityName }
+
+            let item kind name =
+                resolvedItem kind schemaName name (Some entityRef)
+
+            for KeyValue(fieldName, field) in entity.ComputedFields do
+                match field with
+                | Ok comp when Option.isNone comp.InheritedFrom ->
+                    addUsed (item "computed_field" (string fieldName)) comp.UsedDatabase
+                | _ -> ()
+
+            for KeyValue(constrName, constr) in entity.CheckConstraints do
+                addUsed (item "check_constraint" (string constrName)) constr.UsedDatabase
+
+            for KeyValue(indexName, index) in entity.Indexes do
+                let exprs =
+                    Seq.concat
+                        [ index.Expressions |> Seq.map (fun col -> col.Expr)
+                          Seq.ofArray index.IncludedExpressions
+                          Option.toSeq index.Predicate ]
+
+                let indexItem = item "index" (string indexName)
+
+                for expr in exprs do
+                    addUsed indexItem (fieldExprUsedReferences layout expr).UsedDatabase
+
+            if entity.MainField <> funId then
+                addField entityRef entity.MainField (item "main_field" (string entityName))
+
+    for KeyValue(schemaName, viewsSchema) in userViews.Schemas do
+        match viewsSchema with
+        | Error _ -> ()
+        | Ok viewsSchema ->
+            for KeyValue(viewName, view) in viewsSchema.UserViews do
+                match view with
+                | Error _ -> ()
+                | Ok pref ->
+                    let used = selectExprUsedReferences layout pref.UserView.Resolved.Select
+                    addUsed (resolvedItem "user_view" schemaName (string viewName) None) used.UsedDatabase
+
+    for KeyValue(schemaName, permissionsSchema) in permissions.Schemas do
+        for KeyValue(roleName, role) in permissionsSchema.Roles do
+            match role with
+            | Error _ -> ()
+            | Ok role ->
+                for KeyValue(allowedSchemaName, allowedSchema) in role.Permissions.Schemas do
+                    for KeyValue(allowedEntityName, allowedEntity) in allowedSchema.Entities do
+                        match allowedEntity with
+                        | Error _ -> ()
+                        | Ok allowedEntity ->
+                            let entityRef =
+                                { Schema = allowedSchemaName
+                                  Name = allowedEntityName }
+
+                            for KeyValue(kind, used) in allowedEntity.UsedDatabases do
+                                let item =
+                                    { resolvedItem "role_rule" schemaName (string roleName) (Some entityRef) with
+                                        Detail = Some(restrictionKindString kind) }
+
+                                addUsed item used
+
+    { Fields = fields
+      Entities = entities
+      JSSources = jsSources }
+
+let private loadJSSources (ctx: IContext) : Task<JSSource[]> =
+    task {
+        let system = ctx.Transaction.System
+        let! actions = ActionsSchema.buildSchemaActions system None ctx.CancellationToken
+        let! triggers = TriggersSchema.buildSchemaTriggers system None ctx.CancellationToken
+        let! modules = ModulesSchema.buildSchemaModules system None ctx.CancellationToken
+
+        let source kind (schemaName: SchemaName) name entity text =
+            { Item =
+                { Kind = kind
+                  Schema = string schemaName
+                  Name = name
+                  Entity = entity
+                  Detail = None
+                  Confidence = "text" }
+              Source = text }
+
+        let actionSources =
+            seq {
+                for KeyValue(schemaName, schema) in actions.Schemas do
+                    for KeyValue(name, action) in schema.Actions do
+                        yield source "action" schemaName (string name) None action.Function
+            }
+
+        let triggerSources =
+            seq {
+                for KeyValue(schemaName, triggersDb) in triggers.Schemas do
+                    for KeyValue(entitySchemaName, triggersSchema) in triggersDb.Schemas do
+                        for KeyValue(entityName, triggersEntity) in triggersSchema.Entities do
+                            let entityRef =
+                                { Schema = entitySchemaName
+                                  Name = entityName }
+
+                            for KeyValue(name, trigger) in triggersEntity.Triggers do
+                                yield
+                                    source
+                                        "trigger"
+                                        schemaName
+                                        (string name)
+                                        (Some(entityRefString entityRef))
+                                        trigger.Procedure
+            }
+
+        let moduleSources =
+            seq {
+                for KeyValue(schemaName, schema) in modules.Schemas do
+                    for KeyValue(path, modul) in schema.Modules do
+                        yield source "module" schemaName path None modul.Source
+            }
+
+        return Seq.concat [ actionSources; triggerSources; moduleSources ] |> Seq.toArray
+    }
+
+let private jsMatches (sources: JSSource[]) (word: string) : DependencyItem seq =
+    let regex = Regex(@"\b" + Regex.Escape word + @"\b")
+
+    sources
+    |> Seq.filter (fun s -> s.Source.Contains(word, StringComparison.Ordinal))
+    |> Seq.collect (fun s ->
+        s.Source.Split('\n')
+        |> Seq.indexed
+        |> Seq.filter (fun (_, line) -> regex.IsMatch line)
+        |> Seq.map (fun (i, _) ->
+            { s.Item with
+                Detail = Some(sprintf "line %i" (i + 1)) }))
+
+let private dependencyLine (item: DependencyItem) =
+    match item.Detail with
+    | Some detail when item.Confidence = "text" -> int (detail.Substring("line ".Length))
+    | _ -> 0
+
+let private sortDependencies (items: DependencyItem seq) : DependencyItem[] =
+    items
+    |> Set.ofSeq
+    |> Seq.sortBy (fun i -> (i.Kind, i.Schema, i.Name, dependencyLine i, i.Detail, i.Entity))
+    |> Seq.toArray
+
 type IntrospectionAPI(api: IOzmaDBAPI) =
     let rctx = api.Request
     let ctx = rctx.Context
@@ -234,7 +467,60 @@ type IntrospectionAPI(api: IOzmaDBAPI) =
     member this.GetEntity(ref: ResolvedEntityRef) : Task<EntityDetails option> =
         task { return ctx.Layout.FindEntity ref |> Option.map (entityDetails ref) }
 
+    member this.GetDependencies
+        (entityRef: ResolvedEntityRef)
+        (fieldName: FieldName option)
+        : Task<Result<DependenciesResult, DependenciesError>> =
+        task {
+            match ctx.Layout.FindEntity entityRef with
+            | None -> return Error DEEntityNotFound
+            | Some entity ->
+                let target =
+                    match fieldName with
+                    | None -> Ok None
+                    | Some name ->
+                        match entity.FindField name with
+                        | None -> Error DEFieldNotFound
+                        | Some info -> Ok(Some info.Name)
+
+                match target with
+                | Error e -> return Error e
+                | Ok target ->
+                    let! index =
+                        task {
+                            match dependencyIndexes.TryGetValue ctx.Layout with
+                            | (true, index) -> return index
+                            | (false, _) ->
+                                let! jsSources = loadJSSources ctx
+
+                                let index = buildDependencyIndex ctx.Layout ctx.UserViews ctx.Permissions jsSources
+
+                                dependencyIndexes.AddOrUpdate(ctx.Layout, index)
+                                return index
+                        }
+
+                    let lookup (dict: Dictionary<'k, MutableHashSet<DependencyItem>>) (key: 'k) =
+                        match dict.TryGetValue key with
+                        | (true, items) -> items :> DependencyItem seq
+                        | (false, _) -> Seq.empty
+
+                    let (resolved, word) =
+                        match target with
+                        | None -> (lookup index.Entities entityRef, string entityRef.Name)
+                        | Some name ->
+                            let declRef = declaringEntity ctx.Layout entityRef name
+                            (lookup index.Fields { Entity = declRef; Name = name }, string name)
+
+                    let items = Seq.append resolved (jsMatches index.JSSources word)
+
+                    return
+                        Ok
+                            { Ok = true
+                              Items = sortDependencies items }
+        }
+
     interface IIntrospectionAPI with
         member this.ValidateQuery req = this.ValidateQuery req
         member this.GetSchemas() = this.GetSchemas()
         member this.GetEntity ref = this.GetEntity ref
+        member this.GetDependencies ref field = this.GetDependencies ref field

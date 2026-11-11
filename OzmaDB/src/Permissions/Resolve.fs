@@ -143,7 +143,7 @@ type private RoleResolver
         (entity: ResolvedEntity)
         (allowIds: bool)
         (where: string)
-        : ResolvedOptimizedFieldExpr =
+        : UsedDatabase * ResolvedOptimizedFieldExpr =
         let whereExpr =
             match parse tokenizeOzmaQL fieldExpr where with
             | Ok r -> r
@@ -172,13 +172,13 @@ type private RoleResolver
         then
             raisef ResolvePermissionsException "Cannot use id in this restriction"
 
-        optimizeFieldExpr expr
+        (usedReferences.UsedDatabase, optimizeFieldExpr expr)
 
     let resolveAllowedField
         (fieldRef: ResolvedFieldRef)
         (entity: ResolvedEntity)
         (allowedField: SourceAllowedField)
-        : AllowedField =
+        : AllowedField * Map<RestrictionKind, UsedDatabase> =
         let field =
             match Map.tryFind fieldRef.Name entity.ColumnFields with
             | None -> raisef ResolvePermissionsException "Unknown field"
@@ -189,12 +189,22 @@ type private RoleResolver
 
         let resolveOne allowIds =
             Option.map (resolveRestriction fieldRef.Entity entity allowIds)
-            >> Option.defaultValue OFEFalse
+            >> Option.defaultValue (emptyUsedDatabase, OFEFalse)
 
-        { Insert = allowedField.Insert
-          Update = resolveOne true allowedField.Update
-          Select = resolveOne true allowedField.Select
-          Check = resolveOne false allowedField.Check }
+        let (updateUsed, update) = resolveOne true allowedField.Update
+        let (selectUsed, select) = resolveOne true allowedField.Select
+        let (checkUsed, check) = resolveOne false allowedField.Check
+
+        let field =
+            { Insert = allowedField.Insert
+              Update = update
+              Select = select
+              Check = check }
+
+        let used =
+            Map.ofList [ (RKUpdate, updateUsed); (RKSelect, selectUsed); (RKCheck, checkUsed) ]
+
+        (field, used)
 
     let resolveAllowAllField
         (entityInsert: bool)
@@ -239,18 +249,37 @@ type private RoleResolver
             | Some expr -> resolveRestriction entityRef entity allowIds expr
             | None ->
                 match parentEntity with
-                | None -> OFEFalse
+                | None -> (emptyUsedDatabase, OFEFalse)
                 | Some parent ->
                     match accessor parent.Allowed with
-                    | OFEFalse -> OFEFalse
-                    | _ -> OFETrue
+                    | OFEFalse -> (emptyUsedDatabase, OFEFalse)
+                    | _ -> (emptyUsedDatabase, OFETrue)
 
-        let check = propagateFromParent (fun pent -> pent.Check) false allowedEntity.Check
-        let select = propagateFromParent (fun pent -> pent.Select) true allowedEntity.Select
-        let update = propagateFromParent (fun pent -> pent.Update) true allowedEntity.Update
+        let (checkUsed, check) =
+            propagateFromParent (fun pent -> pent.Check) false allowedEntity.Check
 
-        let delete =
+        let (selectUsed, select) =
+            propagateFromParent (fun pent -> pent.Select) true allowedEntity.Select
+
+        let (updateUsed, update) =
+            propagateFromParent (fun pent -> pent.Update) true allowedEntity.Update
+
+        let (deleteUsed, delete) =
             propagateFromParent (fun pent -> Result.defaultValue OFEFalse pent.Delete) true allowedEntity.Delete
+
+        let used =
+            ref (
+                Map.ofList
+                    [ (RKCheck, checkUsed)
+                      (RKSelect, selectUsed)
+                      (RKUpdate, updateUsed)
+                      (RKDelete, deleteUsed) ]
+            )
+
+        let mapField name allowedField =
+            let (field, fieldUsed) = mapField name allowedField
+            used.Value <- Map.unionWith unionUsedDatabases used.Value fieldUsed
+            field
 
         let fields =
             if allowedEntity.AllowAllFields then
@@ -279,7 +308,8 @@ type private RoleResolver
           Insert = Ok allowedEntity.Insert
           Select = select
           Update = update
-          Delete = Ok delete }
+          Delete = Ok delete
+          UsedDatabases = used.Value }
 
     let rec checkParentRowAccess (entity: ResolvedEntity) (check: AllowedEntity option -> unit) =
         match entity.Parent with

@@ -76,6 +76,28 @@ def test_schema(api):
     column(orders_id, "total", "decimal")
     insert(api, "public", "unique_constraints", {"entity_id": orders_id, "name": "unique_parent_ref", "columns": ["parent_ref"]})
 
+    insert(api, "public", "computed_fields", {"entity_id": child_id, "name": "amount_plus_one", "expression": "amount + 1"})
+
+    # Views, roles and actions belong to the schema, so dropping it removes them too.
+    insert(
+        api,
+        "public",
+        "user_views",
+        {"schema_id": schema_id, "name": "parents_view", "query": f"select amount from {TEST_SCHEMA}.parent"},
+    )
+    role_id = insert(api, "public", "roles", {"schema_id": schema_id, "name": "mcp_test_role"})
+    insert(api, "public", "role_entities", {"role_id": role_id, "entity_id": parent_id, "select": "amount > 0"})
+    insert(
+        api,
+        "public",
+        "actions",
+        {
+            "schema_id": schema_id,
+            "name": "use_amount",
+            "function": "export default async function handler(args) {\n  const amount = args.amount;\n  return { ok: true };\n}\n",
+        },
+    )
+
     yield TEST_SCHEMA
 
     _drop_test_schema(api)

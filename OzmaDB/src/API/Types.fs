@@ -1091,10 +1091,29 @@ type EntityDetails =
       Indexes: EntityIndex[]
       References: EntityReference[] }
 
+type DependencyItem =
+    { Kind: string
+      Schema: string
+      Name: string
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      Entity: string option
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      Detail: string option
+      Confidence: string }
+
+type DependenciesResult = { Ok: bool; Items: DependencyItem[] }
+
+type DependenciesError =
+    | DEEntityNotFound
+    | DEFieldNotFound
+
 type IIntrospectionAPI =
     abstract member ValidateQuery: ValidateQueryRequest -> Task<ValidateResult>
     abstract member GetSchemas: unit -> Task<SchemaSummary[]>
     abstract member GetEntity: ResolvedEntityRef -> Task<EntityDetails option>
+
+    abstract member GetDependencies:
+        ResolvedEntityRef -> FieldName option -> Task<Result<DependenciesResult, DependenciesError>>
 
 type IOzmaDBAPI =
     abstract member Request: IRequestContext
