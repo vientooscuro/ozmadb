@@ -125,6 +125,8 @@ type IContext =
 
     abstract member SetForceAllowBroken: unit -> unit
     abstract member ScheduleMigration: unit -> unit
+    // Validates the scheduled migration without committing it or touching the cached state.
+    abstract member ValidateMigration: DryRunMode -> Task<MigrationValidation>
     abstract member ScheduleBeforeCommit: string -> (Layout -> Task<Result<unit, GenericErrorInfo>>) -> unit
     abstract member Commit: unit -> Task<Result<unit, GenericErrorInfo>>
     abstract member CheckIntegrity: unit -> Task
@@ -1006,6 +1008,9 @@ type ValidateErrorKind =
     | [<CaseKey("resolve")>] VEKResolve
     | [<CaseKey("compile")>] VEKCompile
     | [<CaseKey("syntax")>] VEKSyntax
+    | [<CaseKey("migration")>] VEKMigration
+    | [<CaseKey("migration_conflict")>] VEKMigrationConflict
+    | [<CaseKey("lock_timeout")>] VEKLockTimeout
 
 type ValidateErrorItem =
     { Message: string
@@ -1016,6 +1021,18 @@ type ValidateErrorItem =
       Column: int option
       [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
       Path: string option }
+
+type DryRunMode =
+    // Resolve everything without executing DDL or user view queries.
+    | DRPlan
+    // Also apply DDL and run user views, like a real migration, but never commit.
+    | DRFull
+
+type MigrationValidation =
+    { Ok: bool
+      Errors: ValidateErrorItem list
+      Ddl: string list
+      BrokenObjects: string list }
 
 type ValidateColumn =
     { Name: string

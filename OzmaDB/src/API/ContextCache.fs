@@ -117,6 +117,177 @@ let private migrationLockParams = Map.singleton 0 (SQL.VInt migrationLockNumber)
 let private assemblyId =
     Assembly.GetExecutingAssembly().ManifestModule.ModuleVersionId
 
+type private MigrationMode =
+    | MMCommit
+    | MMDryRun of DryRunMode
+
+// Everything a validated migration produces that is needed to commit it.
+[<NoEquality; NoComparison>]
+type private ValidatedMigration =
+    { Layout: Layout
+      Migration: MigrationPlan
+      WantedUserMeta: SQL.DatabaseMeta
+      JSEngines: RuntimeLocal<OzmaJSEngine>
+      Actions: ResolvedActions
+      Triggers: OzmaDB.Triggers.Types.ResolvedTriggers
+      MergedTriggers: MergedTriggers
+      SourceUserViews: SourceUserViews
+      MergedAttrs: MergedDefaultAttributes
+      UserViews: UserViews
+      Permissions: Permissions
+      CheckedPrefetchedUserViews: PrefetchedUserViews
+      // Objects that would be broken and are not allowed to be; filled only in dry-run mode.
+      BrokenObjects: (string * exn) list }
+
+// Mirrors the `checkBroken*` traversals from `Operations.Preload`.
+let private collectBrokenObjects
+    (layout: Layout)
+    (actions: PreparedActions)
+    (triggers: PreparedTriggers)
+    (attrs: OzmaDB.Attributes.Types.DefaultAttributes)
+    (userViews: UserViews)
+    (perms: Permissions)
+    : (string * exn) list =
+    [ for KeyValue(schemaName, schema) in layout.Schemas do
+          for KeyValue(entityName, entity) in schema.Entities do
+              for KeyValue(compName, maybeComputedField) in entity.ComputedFields do
+                  match maybeComputedField with
+                  | Error err when not err.AllowBroken ->
+                      let ref: ResolvedFieldRef =
+                          { Entity =
+                              { Schema = schemaName
+                                Name = entityName }
+                            Name = compName }
+
+                      yield (sprintf "Computed field %O" ref, err.Error)
+                  | _ -> ()
+
+      for KeyValue(schemaName, schema) in attrs.Schemas do
+          for KeyValue(attrsSchemaName, attrsSchema) in schema.Schemas do
+              for KeyValue(attrsEntityName, attrsEntity) in attrsSchema.Entities do
+                  for KeyValue(attrsFieldName, maybeAttr) in attrsEntity.Fields do
+                      match maybeAttr with
+                      | Error err when not err.AllowBroken ->
+                          let ref: ResolvedFieldRef =
+                              { Entity =
+                                  { Schema = attrsSchemaName
+                                    Name = attrsEntityName }
+                                Name = attrsFieldName }
+
+                          yield (sprintf "Default attributes from %O for field %O" schemaName ref, err.Error)
+                      | _ -> ()
+
+      for KeyValue(schemaName, schema) in actions.Schemas do
+          for KeyValue(actionName, maybeAction) in schema.Actions do
+              match maybeAction with
+              | Error err when not err.AllowBroken ->
+                  let ref: ActionRef =
+                      { Schema = schemaName
+                        Name = actionName }
+
+                  yield (sprintf "Action %O" ref, err.Error)
+              | _ -> ()
+
+      for KeyValue(schemaName, schema) in triggers.Schemas do
+          for KeyValue(triggerSchemaName, triggersSchema) in schema.Schemas do
+              for KeyValue(triggerEntityName, triggersEntity) in triggersSchema.Entities do
+                  for KeyValue(triggerName, maybeTrigger) in triggersEntity.Triggers do
+                      match maybeTrigger with
+                      | Error err when not err.AllowBroken ->
+                          let ref: OzmaDB.Triggers.Types.TriggerRef =
+                              { Schema = schemaName
+                                Entity =
+                                  { Schema = triggerSchemaName
+                                    Name = triggerEntityName }
+                                Name = triggerName }
+
+                          yield (sprintf "Trigger %O" ref, err.Error)
+                      | _ -> ()
+
+      for KeyValue(schemaName, maybeSchema) in userViews.Schemas do
+          match maybeSchema with
+          | Ok schema ->
+              for KeyValue(uvName, maybeUv) in schema.UserViews do
+                  match maybeUv with
+                  | Error err when not err.AllowBroken ->
+                      let ref: ResolvedUserViewRef = { Schema = schemaName; Name = uvName }
+                      yield (sprintf "User view %O" ref, err.Error)
+                  | _ -> ()
+          | Error err when not err.AllowBroken ->
+              yield (sprintf "User view generator for schema %O" schemaName, err.Error)
+          | _ -> ()
+
+      for KeyValue(schemaName, schema) in perms.Schemas do
+          for KeyValue(roleName, maybeRole) in schema.Roles do
+              let roleRef: ResolvedRoleRef = { Schema = schemaName; Name = roleName }
+
+              match maybeRole with
+              | Ok role ->
+                  for KeyValue(allowedSchemaName, allowedSchema) in role.Permissions.Schemas do
+                      for KeyValue(allowedEntityName, maybeEntity) in allowedSchema.Entities do
+                          let entityRef: ResolvedEntityRef =
+                              { Schema = allowedSchemaName
+                                Name = allowedEntityName }
+
+                          let name = sprintf "Role %O for entity %O" roleRef entityRef
+
+                          match maybeEntity with
+                          | Ok entity ->
+                              match entity.Insert with
+                              | Error e when not entity.AllowBroken -> yield (name, e)
+                              | _ -> ()
+
+                              match entity.Delete with
+                              | Error e when not entity.AllowBroken -> yield (name, e)
+                              | _ -> ()
+                          | Error err when not err.AllowBroken -> yield (name, err.Error)
+                          | _ -> ()
+              | Error err when not err.AllowBroken -> yield (sprintf "Role %O" roleRef, err.Error)
+              | _ -> () ]
+
+let private isLockTimeout (e: exn) =
+    let rec go (e: exn) =
+        match e with
+        | null -> false
+        | :? PostgresException as pe when pe.SqlState = "55P03" -> true
+        | _ -> go e.InnerException
+
+    go e
+
+let private isResolveError (e: exn) =
+    match e with
+    | :? ResolveLayoutException
+    | :? ResolveModulesException
+    | :? JavaScriptRuntimeException
+    | :? ResolveActionsException
+    | :? ActionRunException
+    | :? ResolveTriggersException
+    | :? TriggerRunException
+    | :? UserViewGenerateException
+    | :? ParseAttributesException
+    | :? ResolveAttributesException
+    | :? UserViewResolveException
+    | :? ResolvePermissionsException
+    | :? UserViewDryRunException -> true
+    | _ -> false
+
+let private migrationErrorItem (e: exn) : ValidateErrorItem =
+    let (kind, message) =
+        match e with
+        | _ when isLockTimeout e -> (VEKLockTimeout, fullUserMessage e)
+        | :? ContextException as ce ->
+            match ce.Details with
+            | GEMigrationConflict -> (VEKMigrationConflict, ce.Details.LogMessage)
+            | _ when isResolveError ce.InnerException -> (VEKResolve, ce.Details.LogMessage)
+            | _ -> (VEKMigration, ce.Details.LogMessage)
+        | _ -> (VEKMigration, fullUserMessage e)
+
+    { Message = message
+      Kind = kind
+      Line = None
+      Column = None
+      Path = None }
+
 [<NoEquality; NoComparison>]
 type private CachedContext =
     { Layout: Layout
@@ -1086,47 +1257,73 @@ for insert into
                 let mutable cancellationToken = initialCancellationToken
                 let mutable commitCancellationToken = initialCancellationToken
 
-                let migrate () =
+                let acquireMigrationLock () =
                     task {
-                        let! localSuccess = cachedStateLock.WaitAsync(0)
+                        match!
+                            transaction.Connection.Query.ExecuteValueQuery
+                                "SELECT pg_try_advisory_xact_lock(@0)"
+                                migrationLockParams
+                                cancellationToken
+                        with
+                        | None -> failwith "Impossible"
+                        | Some(lockName, lockRet, SQL.VBool true) -> ()
+                        | _ -> raise <| ContextException(GEMigrationConflict)
+                    }
 
-                        if not localSuccess then
-                            raise <| ContextException(GEMigrationConflict)
+                let validateMigration (mode: MigrationMode) : Task<ValidatedMigration> =
+                    task {
+                        // The commit path behaves exactly as before; a dry run resolves with broken objects
+                        // allowed to collect all of them, and never marks them.
+                        let (allowBroken, markBroken) =
+                            match mode with
+                            | MMCommit -> (forceAllowBroken, forceAllowBroken)
+                            | MMDryRun _ -> (true, false)
 
-                        try
-                            match!
-                                transaction.Connection.Query.ExecuteValueQuery
-                                    "SELECT pg_try_advisory_xact_lock(@0)"
-                                    migrationLockParams
+                        let executeDDL =
+                            match mode with
+                            | MMCommit
+                            | MMDryRun DRFull -> true
+                            | MMDryRun DRPlan -> false
+
+                        let runViews =
+                            match mode with
+                            | MMCommit -> not forceAllowBroken
+                            | MMDryRun DRFull -> true
+                            | MMDryRun DRPlan -> false
+
+                        match mode with
+                        | MMCommit -> logger.LogInformation("Starting migration")
+                        | MMDryRun _ -> logger.LogInformation("Starting migration dry run")
+
+                        if mode = MMDryRun DRFull then
+                            let! _ =
+                                transaction.Connection.Query.ExecuteNonQuery
+                                    "SET LOCAL lock_timeout = '2s'"
+                                    Map.empty
                                     cancellationToken
-                            with
-                            | None -> failwith "Impossible"
-                            | Some(lockName, lockRet, SQL.VBool true) -> ()
-                            | _ -> raise <| ContextException(GEMigrationConflict)
 
-                            logger.LogInformation("Starting migration")
-                            // Careful here not to evaluate user views before we do migration.
+                            ()
 
-                            let! sourceLayout = buildSchemaLayout transaction.System None cancellationToken
-                            let sourceLayout = applyHiddenLayoutData sourceLayout (preloadLayout preload)
+                        // Careful here not to evaluate user views before we do migration.
 
-                            if not <| preloadLayoutIsUnchanged sourceLayout preload then
-                                raise <| ContextException(GEMigration("Cannot modify preloaded layout"))
+                        let! sourceLayout = buildSchemaLayout transaction.System None cancellationToken
+                        let sourceLayout = applyHiddenLayoutData sourceLayout (preloadLayout preload)
 
-                            let layout =
-                                try
-                                    resolveLayout forceAllowBroken sourceLayout
-                                with :? ResolveLayoutException as e when e.IsUserException ->
-                                    raise
-                                    <| ContextException(
-                                        GEMigration("Failed to resolve layout: " + fullUserMessage e),
-                                        e
-                                    )
+                        if not <| preloadLayoutIsUnchanged sourceLayout preload then
+                            raise <| ContextException(GEMigration("Cannot modify preloaded layout"))
 
-                            if forceAllowBroken then
-                                do! checkBrokenLayout logger true preload transaction layout cancellationToken
+                        let layout =
+                            try
+                                resolveLayout allowBroken sourceLayout
+                            with :? ResolveLayoutException as e when e.IsUserException ->
+                                raise
+                                <| ContextException(GEMigration("Failed to resolve layout: " + fullUserMessage e), e)
 
-                            // Apply user-defined DDL prelude before migration so dependent schema operations can succeed.
+                        if markBroken then
+                            do! checkBrokenLayout logger true preload transaction layout cancellationToken
+
+                        // Apply user-defined DDL prelude before migration so dependent schema operations can succeed.
+                        if executeDDL then
                             try
                                 do! applyUserDefinedDDL transaction cancellationToken
                             with e ->
@@ -1138,29 +1335,27 @@ for insert into
                                     e
                                 )
 
-                            // Actually migrate.
-                            let (newAssertions, wantedLayoutMeta) =
-                                buildFullLayoutMeta layout (filterUserLayout layout)
+                        // Actually migrate.
+                        let (newAssertions, wantedLayoutMeta) =
+                            buildFullLayoutMeta layout (filterUserLayout layout)
 
-                            let! protectedFunctions =
-                                try
-                                    getProtectedUserFunctions transaction cancellationToken
-                                with e ->
-                                    raise
-                                    <| ContextException(
-                                        GEMigration(
-                                            "Failed to load user-defined function registry: " + fullUserMessage e
-                                        ),
-                                        e
-                                    )
+                        let! protectedFunctions =
+                            try
+                                getProtectedUserFunctions transaction cancellationToken
+                            with e ->
+                                raise
+                                <| ContextException(
+                                    GEMigration("Failed to load user-defined function registry: " + fullUserMessage e),
+                                    e
+                                )
 
-                            let migration =
-                                planDatabaseMigration oldState.Context.UserMeta wantedLayoutMeta
-                                |> Array.filter (function
-                                    | SQL.SODropFunction(funcRef, _) when Set.contains funcRef protectedFunctions ->
-                                        false
-                                    | _ -> true)
+                        let migration =
+                            planDatabaseMigration oldState.Context.UserMeta wantedLayoutMeta
+                            |> Array.filter (function
+                                | SQL.SODropFunction(funcRef, _) when Set.contains funcRef protectedFunctions -> false
+                                | _ -> true)
 
+                        if executeDDL then
                             try
                                 do! migrateDatabase transaction.Connection.Query migration cancellationToken
                             with :? QueryExecutionException as e ->
@@ -1182,14 +1377,16 @@ for insert into
                                     e
                                 )
 
-                            // Store actual user metadata after migration and user-defined DDL execution.
-                            let! wantedUserMeta = buildUserDatabaseMeta transaction preload cancellationToken
+                        // Store actual user metadata after migration and user-defined DDL execution.
+                        let! wantedUserMeta = buildUserDatabaseMeta transaction preload cancellationToken
 
-                            let oldAssertions =
-                                buildAssertions oldState.Context.Layout (filterUserLayout oldState.Context.Layout)
+                        let oldAssertions =
+                            buildAssertions oldState.Context.Layout (filterUserLayout oldState.Context.Layout)
 
-                            let addedAssertions = differenceLayoutAssertions newAssertions oldAssertions
+                        let addedAssertions = differenceLayoutAssertions newAssertions oldAssertions
 
+                        // Assertions query the migrated tables, so they can only be checked after DDL.
+                        if executeDDL then
                             try
                                 do!
                                     checkAssertions
@@ -1200,227 +1397,254 @@ for insert into
                             with :? LayoutIntegrityException as e ->
                                 raise <| ContextException(GEMigration(fullUserMessage e), e)
 
-                            let! sourceModules = buildSchemaModules transaction.System None cancellationToken
+                        let! sourceModules = buildSchemaModules transaction.System None cancellationToken
 
-                            if not <| preloadModulesAreUnchanged sourceModules preload then
-                                raise <| ContextException(GEMigration("Cannot modify preloaded modules"))
+                        if not <| preloadModulesAreUnchanged sourceModules preload then
+                            raise <| ContextException(GEMigration("Cannot modify preloaded modules"))
 
-                            let modules =
-                                try
-                                    resolveModules layout sourceModules false
-                                with :? ResolveModulesException as e ->
-                                    raise
-                                    <| ContextException(
-                                        GEMigration("Failed to resolve modules: " + fullUserMessage e),
-                                        e
-                                    )
-
-                            let jsEngines = makeJSEngines (moduleFiles modules)
-
-                            let jsEngine =
-                                try
-                                    jsEngines.GetValue runtime.Value
-                                with :? JavaScriptRuntimeException as e ->
-                                    raise
-                                    <| ContextException(
-                                        GEMigration("Failed to resolve modules: " + fullUserMessage e),
-                                        e
-                                    )
-
-                            let! sourceActions = buildSchemaActions transaction.System None cancellationToken
-
-                            if not <| preloadActionsAreUnchanged sourceActions preload then
-                                raise <| ContextException(GEMigration("Cannot modify preloaded actions"))
-
-                            let actions =
-                                try
-                                    resolveActions layout forceAllowBroken sourceActions
-                                with :? ResolveActionsException as e ->
-                                    raise
-                                    <| ContextException(
-                                        GEMigration("Failed to resolve actions: " + fullUserMessage e),
-                                        e
-                                    )
-
-                            let preparedActions =
-                                try
-                                    prepareActions jsEngine forceAllowBroken actions cancellationToken
-                                with :? ActionRunException as e ->
-                                    raise
-                                    <| ContextException(
-                                        GEMigration("Failed to resolve actions: " + fullUserMessage e),
-                                        e
-                                    )
-
-                            if forceAllowBroken then
-                                do! checkBrokenActions logger true preload transaction preparedActions cancellationToken
-
-                            let! sourceTriggers = buildSchemaTriggers transaction.System None cancellationToken
-
-                            if not <| preloadTriggersAreUnchanged sourceTriggers preload then
-                                raise <| ContextException(GEMigration("Cannot modify preloaded triggers"))
-
-                            let triggers =
-                                try
-                                    resolveTriggers layout forceAllowBroken sourceTriggers
-                                with :? ResolveTriggersException as e ->
-                                    raise
-                                    <| ContextException(
-                                        GEMigration("Failed to resolve triggers: " + fullUserMessage e),
-                                        e
-                                    )
-
-                            let preparedTriggers =
-                                try
-                                    prepareTriggers jsEngine forceAllowBroken triggers cancellationToken
-                                with :? TriggerRunException as e ->
-                                    raise
-                                    <| ContextException(
-                                        GEMigration("Failed to resolve triggers: " + fullUserMessage e),
-                                        e
-                                    )
-
-                            let mergedTriggers = mergeTriggers layout triggers
-
-                            if forceAllowBroken then
-                                do!
-                                    checkBrokenTriggers
-                                        logger
-                                        true
-                                        preload
-                                        transaction
-                                        preparedTriggers
-                                        cancellationToken
-
-                            let! sourceUserViewsRaw = buildSchemaUserViews transaction.System None cancellationToken
-                            let sourceUserViews = upgradeSystemAdminViews sourceUserViewsRaw
-
-                            let currentSystemViews = filterSystemViews sourceUserViews
-
-                            let expectedSystemViews =
-                                oldState.Context.SystemViews |> upgradeSystemAdminViews |> filterSystemViews
-
-                            if currentSystemViews <> expectedSystemViews then
-                                raise <| ContextException(GEMigration("Cannot modify preloaded user views"))
-
-                            logger.LogInformation("Updating generated user views")
-
-                            let generatedUserViews =
-                                try
-                                    generateUserViews
-                                        jsEngine
-                                        layout
-                                        mergedTriggers
-                                        forceAllowBroken
-                                        sourceUserViews
-                                        cancellationToken
-                                with :? UserViewGenerateException as e ->
-                                    raise
-                                    <| ContextException(
-                                        GEMigration("Failed to generate user views: " + fullUserMessage e),
-                                        e
-                                    )
-
-                            let! userViewsUpdate =
-                                updateUserViews
-                                    transaction.System
-                                    (generatedUserViewsSource sourceUserViews generatedUserViews)
-                                    cancellationToken
-
-                            do! deleteDeferredFromUpdate layout transaction userViewsUpdate cancellationToken
-
-                            let! sourceAttrs = buildSchemaAttributes transaction.System None cancellationToken
-
-                            if not <| preloadAttributesAreUnchanged sourceAttrs preload then
+                        let modules =
+                            try
+                                resolveModules layout sourceModules false
+                            with :? ResolveModulesException as e ->
                                 raise
-                                <| ContextException(GEMigration("Cannot modify preloaded default attributes"))
+                                <| ContextException(GEMigration("Failed to resolve modules: " + fullUserMessage e), e)
 
-                            let parsedAttrs =
-                                try
-                                    parseAttributes forceAllowBroken sourceAttrs
-                                with :? ParseAttributesException as e ->
-                                    raise
-                                    <| ContextException(
-                                        GEMigration("Failed to resolve default attributes: " + fullUserMessage e),
-                                        e
-                                    )
+                        let jsEngines = makeJSEngines (moduleFiles modules)
 
-                            let defaultAttrs =
-                                try
-                                    resolveAttributes
-                                        layout
-                                        (generatedUserViews.Find >> Option.isSome)
-                                        forceAllowBroken
-                                        parsedAttrs
-                                with :? ResolveAttributesException as e ->
-                                    raise
-                                    <| ContextException(
-                                        GEMigration("Failed to resolve default attributes: " + fullUserMessage e),
-                                        e
-                                    )
+                        let jsEngine =
+                            try
+                                jsEngines.GetValue runtime.Value
+                            with :? JavaScriptRuntimeException as e ->
+                                raise
+                                <| ContextException(GEMigration("Failed to resolve modules: " + fullUserMessage e), e)
 
-                            let mergedAttrs = mergeDefaultAttributes layout defaultAttrs
+                        let! sourceActions = buildSchemaActions transaction.System None cancellationToken
 
-                            if forceAllowBroken then
-                                do! checkBrokenAttributes logger true preload transaction defaultAttrs cancellationToken
+                        if not <| preloadActionsAreUnchanged sourceActions preload then
+                            raise <| ContextException(GEMigration("Cannot modify preloaded actions"))
 
-                            let! pgFunctions = loadPgCatalogFunctions transaction cancellationToken
+                        let actions =
+                            try
+                                resolveActions layout allowBroken sourceActions
+                            with :? ResolveActionsException as e ->
+                                raise
+                                <| ContextException(GEMigration("Failed to resolve actions: " + fullUserMessage e), e)
 
-                            let userViews =
-                                try
-                                    resolveUserViews layout mergedAttrs forceAllowBroken generatedUserViews pgFunctions
-                                with :? UserViewResolveException as e ->
-                                    raise
-                                    <| ContextException(
-                                        GEMigration("Failed to resolve user views: " + fullUserMessage e),
-                                        e
-                                    )
+                        let preparedActions =
+                            try
+                                prepareActions jsEngine allowBroken actions cancellationToken
+                            with :? ActionRunException as e ->
+                                raise
+                                <| ContextException(GEMigration("Failed to resolve actions: " + fullUserMessage e), e)
 
-                            let! sourcePermissions = buildSchemaPermissions transaction.System None cancellationToken
+                        if markBroken then
+                            do! checkBrokenActions logger true preload transaction preparedActions cancellationToken
 
-                            if not <| preloadPermissionsAreUnchanged sourcePermissions preload then
-                                raise <| ContextException(GEMigration("Cannot modify preloaded permissions"))
+                        let! sourceTriggers = buildSchemaTriggers transaction.System None cancellationToken
 
-                            let permissions =
-                                try
-                                    resolvePermissions
-                                        layout
-                                        (userViews.Find >> Option.bind Result.getOption >> Option.isSome)
-                                        forceAllowBroken
-                                        sourcePermissions
-                                with :? ResolvePermissionsException as e ->
-                                    raise
-                                    <| ContextException(
-                                        GEMigration("Failed to resolve permissions: " + fullUserMessage e),
-                                        e
-                                    )
+                        if not <| preloadTriggersAreUnchanged sourceTriggers preload then
+                            raise <| ContextException(GEMigration("Cannot modify preloaded triggers"))
 
-                            if forceAllowBroken then
-                                do! checkBrokenPermissions logger true preload transaction permissions cancellationToken
+                        let triggers =
+                            try
+                                resolveTriggers layout allowBroken sourceTriggers
+                            with :? ResolveTriggersException as e ->
+                                raise
+                                <| ContextException(GEMigration("Failed to resolve triggers: " + fullUserMessage e), e)
 
-                            let! checkedPrefetchedUserViews =
-                                task {
-                                    if forceAllowBroken then
-                                        return emptyPrefetchedUserViews
-                                    else
-                                        try
-                                            return!
-                                                dryRunUserViews
-                                                    transaction.Connection.Query
-                                                    layout
-                                                    mergedTriggers
-                                                    false
-                                                    (Some false)
-                                                    userViews
-                                                    cancellationToken
-                                        with :? UserViewDryRunException as e ->
-                                            return
-                                                raise
-                                                <| ContextException(
-                                                    GEMigration("Failed to resolve user views: " + fullUserMessage e),
-                                                    e
-                                                )
-                                }
+                        let preparedTriggers =
+                            try
+                                prepareTriggers jsEngine allowBroken triggers cancellationToken
+                            with :? TriggerRunException as e ->
+                                raise
+                                <| ContextException(GEMigration("Failed to resolve triggers: " + fullUserMessage e), e)
+
+                        let mergedTriggers = mergeTriggers layout triggers
+
+                        if markBroken then
+                            do! checkBrokenTriggers logger true preload transaction preparedTriggers cancellationToken
+
+                        let! sourceUserViewsRaw = buildSchemaUserViews transaction.System None cancellationToken
+                        let sourceUserViews = upgradeSystemAdminViews sourceUserViewsRaw
+
+                        let currentSystemViews = filterSystemViews sourceUserViews
+
+                        let expectedSystemViews =
+                            oldState.Context.SystemViews |> upgradeSystemAdminViews |> filterSystemViews
+
+                        if currentSystemViews <> expectedSystemViews then
+                            raise <| ContextException(GEMigration("Cannot modify preloaded user views"))
+
+                        logger.LogInformation("Updating generated user views")
+
+                        let generatedUserViews =
+                            try
+                                generateUserViews
+                                    jsEngine
+                                    layout
+                                    mergedTriggers
+                                    allowBroken
+                                    sourceUserViews
+                                    cancellationToken
+                            with :? UserViewGenerateException as e ->
+                                raise
+                                <| ContextException(
+                                    GEMigration("Failed to generate user views: " + fullUserMessage e),
+                                    e
+                                )
+
+                        let! userViewsUpdate =
+                            updateUserViews
+                                transaction.System
+                                (generatedUserViewsSource sourceUserViews generatedUserViews)
+                                cancellationToken
+
+                        do! deleteDeferredFromUpdate layout transaction userViewsUpdate cancellationToken
+
+                        let! sourceAttrs = buildSchemaAttributes transaction.System None cancellationToken
+
+                        if not <| preloadAttributesAreUnchanged sourceAttrs preload then
+                            raise
+                            <| ContextException(GEMigration("Cannot modify preloaded default attributes"))
+
+                        let parsedAttrs =
+                            try
+                                parseAttributes allowBroken sourceAttrs
+                            with :? ParseAttributesException as e ->
+                                raise
+                                <| ContextException(
+                                    GEMigration("Failed to resolve default attributes: " + fullUserMessage e),
+                                    e
+                                )
+
+                        let defaultAttrs =
+                            try
+                                resolveAttributes
+                                    layout
+                                    (generatedUserViews.Find >> Option.isSome)
+                                    allowBroken
+                                    parsedAttrs
+                            with :? ResolveAttributesException as e ->
+                                raise
+                                <| ContextException(
+                                    GEMigration("Failed to resolve default attributes: " + fullUserMessage e),
+                                    e
+                                )
+
+                        let mergedAttrs = mergeDefaultAttributes layout defaultAttrs
+
+                        if markBroken then
+                            do! checkBrokenAttributes logger true preload transaction defaultAttrs cancellationToken
+
+                        let! pgFunctions = loadPgCatalogFunctions transaction cancellationToken
+
+                        let userViews =
+                            try
+                                resolveUserViews layout mergedAttrs allowBroken generatedUserViews pgFunctions
+                            with :? UserViewResolveException as e ->
+                                raise
+                                <| ContextException(
+                                    GEMigration("Failed to resolve user views: " + fullUserMessage e),
+                                    e
+                                )
+
+                        let! sourcePermissions = buildSchemaPermissions transaction.System None cancellationToken
+
+                        if not <| preloadPermissionsAreUnchanged sourcePermissions preload then
+                            raise <| ContextException(GEMigration("Cannot modify preloaded permissions"))
+
+                        let permissions =
+                            try
+                                resolvePermissions
+                                    layout
+                                    (userViews.Find >> Option.bind Result.getOption >> Option.isSome)
+                                    allowBroken
+                                    sourcePermissions
+                            with :? ResolvePermissionsException as e ->
+                                raise
+                                <| ContextException(
+                                    GEMigration("Failed to resolve permissions: " + fullUserMessage e),
+                                    e
+                                )
+
+                        if markBroken then
+                            do! checkBrokenPermissions logger true preload transaction permissions cancellationToken
+
+                        let! checkedPrefetchedUserViews =
+                            task {
+                                if not runViews then
+                                    return emptyPrefetchedUserViews
+                                else
+                                    try
+                                        return!
+                                            dryRunUserViews
+                                                transaction.Connection.Query
+                                                layout
+                                                mergedTriggers
+                                                false
+                                                (Some false)
+                                                userViews
+                                                cancellationToken
+                                    with :? UserViewDryRunException as e ->
+                                        return
+                                            raise
+                                            <| ContextException(
+                                                GEMigration("Failed to resolve user views: " + fullUserMessage e),
+                                                e
+                                            )
+                            }
+
+                        let brokenObjects =
+                            match mode with
+                            | MMCommit -> []
+                            | MMDryRun _ ->
+                                collectBrokenObjects
+                                    layout
+                                    preparedActions
+                                    preparedTriggers
+                                    defaultAttrs
+                                    userViews
+                                    permissions
+
+                        return
+                            ({ Layout = layout
+                               Migration = migration
+                               WantedUserMeta = wantedUserMeta
+                               JSEngines = jsEngines
+                               Actions = actions
+                               Triggers = triggers
+                               MergedTriggers = mergedTriggers
+                               SourceUserViews = sourceUserViews
+                               MergedAttrs = mergedAttrs
+                               UserViews = userViews
+                               Permissions = permissions
+                               CheckedPrefetchedUserViews = checkedPrefetchedUserViews
+                               BrokenObjects = brokenObjects }
+                            : ValidatedMigration)
+                    }
+
+                let migrate () =
+                    task {
+                        let! localSuccess = cachedStateLock.WaitAsync(0)
+
+                        if not localSuccess then
+                            raise <| ContextException(GEMigrationConflict)
+
+                        try
+                            do! acquireMigrationLock ()
+                            let! validated = validateMigration MMCommit
+                            let layout = validated.Layout
+                            let migration = validated.Migration
+                            let wantedUserMeta = validated.WantedUserMeta
+                            let jsEngines = validated.JSEngines
+                            let actions = validated.Actions
+                            let triggers = validated.Triggers
+                            let mergedTriggers = validated.MergedTriggers
+                            let sourceUserViews = validated.SourceUserViews
+                            let mergedAttrs = validated.MergedAttrs
+                            let userViews = validated.UserViews
+                            let permissions = validated.Permissions
+                            let checkedPrefetchedUserViews = validated.CheckedPrefetchedUserViews
 
                             do! runCommitCallbacks layout
 
@@ -1593,6 +1817,61 @@ for insert into
 
                 let mutable needMigration = false
 
+                // Rollback of the request transaction undoes everything done here, including the advisory lock.
+                let validateMigrationDryRun (mode: DryRunMode) : Task<MigrationValidation> =
+                    task {
+                        let failed (e: exn) =
+                            { Ok = false
+                              Errors = [ migrationErrorItem e ]
+                              Ddl = []
+                              BrokenObjects = [] }
+
+                        if not needMigration then
+                            return
+                                { Ok = true
+                                  Errors = []
+                                  Ddl = []
+                                  BrokenObjects = [] }
+                        else
+                            let! localSuccess = cachedStateLock.WaitAsync(0)
+
+                            if not localSuccess then
+                                return failed (ContextException(GEMigrationConflict))
+                            else
+                                try
+                                    try
+                                        do! acquireMigrationLock ()
+                                        let! validated = validateMigration (MMDryRun mode)
+                                        let! userDDL = userDefinedDDLStatements transaction cancellationToken
+
+                                        let ddl =
+                                            userDDL
+                                            @ (validated.Migration |> Seq.map (fun op -> op.ToSQLString()) |> Seq.toList)
+
+                                        let errors =
+                                            if forceAllowBroken then
+                                                []
+                                            else
+                                                validated.BrokenObjects
+                                                |> List.map (fun (name, e) ->
+                                                    { Message = sprintf "%s is broken: %s" name (fullUserMessage e)
+                                                      Kind = VEKResolve
+                                                      Line = None
+                                                      Column = None
+                                                      Path = None })
+
+                                        return
+                                            { Ok = List.isEmpty errors
+                                              Errors = errors
+                                              Ddl = ddl
+                                              BrokenObjects = List.map fst validated.BrokenObjects }
+                                    with
+                                    | :? ContextException as e -> return failed e
+                                    | e when isLockTimeout e -> return failed e
+                                finally
+                                    ignore <| cachedStateLock.Release()
+                    }
+
                 let commit () =
                     task {
                         cancellationToken <- commitCancellationToken
@@ -1696,6 +1975,7 @@ for insert into
 
                         member this.Commit() = commit ()
                         member this.ScheduleMigration() = needMigration <- true
+                        member this.ValidateMigration mode = validateMigrationDryRun mode
 
                         member this.ScheduleBeforeCommit name cb =
                             if not <| OrderedMap.containsKey name scheduledBeforeCommit then

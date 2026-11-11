@@ -167,3 +167,27 @@ let applyUserDefinedDDL (transaction: DatabaseTransaction) (cancellationToken: C
                         functionName
                         signature
     }
+
+// Statements `applyUserDefinedDDL` would execute, in the same order.
+let userDefinedDDLStatements
+    (transaction: DatabaseTransaction)
+    (cancellationToken: CancellationToken)
+    : Task<string list> =
+    task {
+        let! userTypes = loadUserTypes transaction cancellationToken
+        let! userFunctions = loadUserFunctions transaction cancellationToken
+
+        let typeStatements =
+            userTypes
+            |> Seq.map (fun entry ->
+                let struct (_, _, _, ddl) = entry
+                ddl)
+
+        let functionStatements =
+            userFunctions
+            |> Seq.map (fun entry ->
+                let struct (_, _, _, _, ddl) = entry
+                ddl)
+
+        return Seq.append typeStatements functionStatements |> Seq.toList
+    }
