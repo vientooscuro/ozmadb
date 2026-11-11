@@ -1107,6 +1107,42 @@ type DependenciesError =
     | DEEntityNotFound
     | DEFieldNotFound
 
+// Search `kinds` parameter value -> kind of the reported matches.
+let searchKinds =
+    Map.ofList
+        [ ("actions", "action")
+          ("triggers", "trigger")
+          ("modules", "module")
+          ("user_views", "user_view")
+          ("computed_fields", "computed_field")
+          ("check_constraints", "check_constraint")
+          ("role_rules", "role_rule") ]
+
+type SearchRequest =
+    { Query: string
+      IsRegex: bool
+      CaseSensitive: bool
+      Kinds: string[]
+      Limit: int }
+
+type SearchMatch =
+    { Kind: string
+      Schema: string
+      Name: string
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      Entity: string option
+      Line: int
+      Column: int
+      Excerpt: string }
+
+type SearchError = { Kind: string; Message: string }
+
+type SearchResult =
+    { Ok: bool
+      Errors: SearchError[]
+      Truncated: bool
+      Matches: SearchMatch[] }
+
 type IIntrospectionAPI =
     abstract member ValidateQuery: ValidateQueryRequest -> Task<ValidateResult>
     abstract member GetSchemas: unit -> Task<SchemaSummary[]>
@@ -1114,6 +1150,8 @@ type IIntrospectionAPI =
 
     abstract member GetDependencies:
         ResolvedEntityRef -> FieldName option -> Task<Result<DependenciesResult, DependenciesError>>
+
+    abstract member Search: SearchRequest -> Task<SearchResult>
 
 type IOzmaDBAPI =
     abstract member Request: IRequestContext

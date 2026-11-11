@@ -12,6 +12,7 @@ open OzmaDB.OzmaQL.AST
 open OzmaDB.OzmaQL.Resolve
 open OzmaDB.OzmaQL.Compile
 open OzmaDB.OzmaQL.UsedReferences
+open OzmaDB.OzmaQL.Optimize
 open OzmaDB.Layout.Types
 open OzmaDB.UserViews.Types
 open OzmaDB.UserViews.Resolve
@@ -414,6 +415,196 @@ let private sortDependencies (items: DependencyItem seq) : DependencyItem[] =
     |> Seq.sortBy (fun i -> (i.Kind, i.Schema, i.Name, dependencyLine i, i.Detail, i.Entity))
     |> Seq.toArray
 
+// Original texts are not kept by the layout, so these sources are pretty-printed expressions.
+let private searchSourcesCache = ConditionalWeakTable<Layout, JSSource[]>()
+
+let private buildMetadataSources
+    (layout: Layout)
+    (userViews: DryRun.PrefetchedUserViews)
+    (permissions: PermissionsTypes.Permissions)
+    : JSSource[] =
+    let source kind (schemaName: SchemaName) name entity text =
+        { Item =
+            { Kind = kind
+              Schema = string schemaName
+              Name = name
+              Entity = entity
+              Detail = None
+              Confidence = "resolved" }
+          Source = text }
+
+    let layoutSources =
+        seq {
+            for KeyValue(schemaName, schema) in layout.Schemas do
+                for KeyValue(entityName, entity) in schema.Entities do
+                    let entityRef =
+                        { Schema = schemaName
+                          Name = entityName }
+
+                    let entityStr = Some(entityRefString entityRef)
+
+                    for KeyValue(fieldName, field) in entity.ComputedFields do
+                        match field with
+                        | Ok comp when Option.isNone comp.InheritedFrom ->
+                            yield
+                                source
+                                    "computed_field"
+                                    schemaName
+                                    (sprintf "%s.%s" (string entityName) (string fieldName))
+                                    entityStr
+                                    (comp.Expression.ToOzmaQLString())
+                        | _ -> ()
+
+                    for KeyValue(constrName, constr) in entity.CheckConstraints do
+                        yield
+                            source
+                                "check_constraint"
+                                schemaName
+                                (string constrName)
+                                entityStr
+                                (constr.Expression.ToOzmaQLString())
+        }
+
+    let viewSources =
+        seq {
+            for KeyValue(schemaName, viewsSchema) in userViews.Schemas do
+                match viewsSchema with
+                | Error _ -> ()
+                | Ok viewsSchema ->
+                    for KeyValue(viewName, view) in viewsSchema.UserViews do
+                        match view with
+                        | Error _ -> ()
+                        | Ok pref ->
+                            yield
+                                source
+                                    "user_view"
+                                    schemaName
+                                    (string viewName)
+                                    None
+                                    (pref.UserView.Resolved.ToOzmaQLString())
+        }
+
+    let ruleSources =
+        seq {
+            for KeyValue(schemaName, permissionsSchema) in permissions.Schemas do
+                for KeyValue(roleName, role) in permissionsSchema.Roles do
+                    match role with
+                    | Error _ -> ()
+                    | Ok role ->
+                        for KeyValue(allowedSchemaName, allowedSchema) in role.Permissions.Schemas do
+                            for KeyValue(allowedEntityName, allowedEntity) in allowedSchema.Entities do
+                                match allowedEntity with
+                                | Error _ -> ()
+                                | Ok allowedEntity ->
+                                    let entityRef =
+                                        { Schema = allowedSchemaName
+                                          Name = allowedEntityName }
+
+                                    let rules =
+                                        [ ("select", Some allowedEntity.Select)
+                                          ("update", Some allowedEntity.Update)
+                                          ("delete", Result.getOption allowedEntity.Delete)
+                                          ("check", Some allowedEntity.Check) ]
+
+                                    let lines =
+                                        rules
+                                        |> List.choose (fun (kind, expr) ->
+                                            match expr with
+                                            | Some OFEFalse
+                                            | None -> None
+                                            | Some expr -> Some(sprintf "%s: %s" kind (expr.ToOzmaQLString())))
+
+                                    if not (List.isEmpty lines) then
+                                        yield
+                                            source
+                                                "role_rule"
+                                                schemaName
+                                                (string roleName)
+                                                (Some(entityRefString entityRef))
+                                                (String.concat "\n" lines)
+        }
+
+    Seq.concat [ layoutSources; viewSources; ruleSources ] |> Seq.toArray
+
+let private maxExcerptLength = 240
+let private regexTimeout = TimeSpan.FromMilliseconds 500.0
+
+exception private SearchTimeout
+
+let private lineStarts (text: string) : int[] =
+    seq {
+        yield 0
+
+        for i in 0 .. text.Length - 1 do
+            if text.[i] = '\n' then
+                yield i + 1
+    }
+    |> Seq.toArray
+
+// Returns (index, length) of every occurrence.
+let private findOccurrences (regex: Regex option) (query: string) (comparison: StringComparison) (text: string) =
+    match regex with
+    | Some regex ->
+        try
+            regex.Matches text
+            |> Seq.filter (fun m -> m.Length > 0)
+            |> Seq.map (fun m -> (m.Index, m.Length))
+            |> Seq.toArray
+        with :? RegexMatchTimeoutException ->
+            raise SearchTimeout
+    | None ->
+        let result = List<int * int>()
+        let mutable idx = text.IndexOf(query, comparison)
+
+        while idx >= 0 do
+            result.Add((idx, query.Length))
+            idx <- text.IndexOf(query, idx + query.Length, comparison)
+
+        result.ToArray()
+
+let private sourceMatches (regex: Regex option) (req: SearchRequest) (src: JSSource) : SearchMatch[] =
+    let comparison =
+        if req.CaseSensitive then
+            StringComparison.Ordinal
+        else
+            StringComparison.OrdinalIgnoreCase
+
+    let occurrences = findOccurrences regex req.Query comparison src.Source
+
+    if Array.isEmpty occurrences then
+        [||]
+    else
+        let text = src.Source
+        let starts = lineStarts text
+
+        occurrences
+        |> Array.map (fun (index, _) ->
+            let lineIdx =
+                let pos = Array.BinarySearch(starts, index)
+                if pos >= 0 then pos else (~~~pos) - 1
+
+            let lineStart = starts.[lineIdx]
+
+            let lineEnd =
+                if lineIdx + 1 < starts.Length then
+                    starts.[lineIdx + 1] - 1
+                else
+                    text.Length
+
+            let line = text.Substring(lineStart, lineEnd - lineStart).TrimEnd('\r').Trim()
+
+            { Kind = src.Item.Kind
+              Schema = src.Item.Schema
+              Name = src.Item.Name
+              Entity = src.Item.Entity
+              Line = lineIdx + 1
+              Column = index - lineStart + 1
+              Excerpt =
+                if line.Length > maxExcerptLength then
+                    line.Substring(0, maxExcerptLength)
+                else
+                    line })
+
 type IntrospectionAPI(api: IOzmaDBAPI) =
     let rctx = api.Request
     let ctx = rctx.Context
@@ -486,18 +677,7 @@ type IntrospectionAPI(api: IOzmaDBAPI) =
                 match target with
                 | Error e -> return Error e
                 | Ok target ->
-                    let! index =
-                        task {
-                            match dependencyIndexes.TryGetValue ctx.Layout with
-                            | (true, index) -> return index
-                            | (false, _) ->
-                                let! jsSources = loadJSSources ctx
-
-                                let index = buildDependencyIndex ctx.Layout ctx.UserViews ctx.Permissions jsSources
-
-                                dependencyIndexes.AddOrUpdate(ctx.Layout, index)
-                                return index
-                        }
+                    let! index = this.GetIndex()
 
                     let lookup (dict: Dictionary<'k, MutableHashSet<DependencyItem>>) (key: 'k) =
                         match dict.TryGetValue key with
@@ -519,8 +699,93 @@ type IntrospectionAPI(api: IOzmaDBAPI) =
                               Items = sortDependencies items }
         }
 
+    member private this.GetIndex() : Task<DependencyIndex> =
+        task {
+            match dependencyIndexes.TryGetValue ctx.Layout with
+            | (true, index) -> return index
+            | (false, _) ->
+                let! jsSources = loadJSSources ctx
+                let index = buildDependencyIndex ctx.Layout ctx.UserViews ctx.Permissions jsSources
+                dependencyIndexes.AddOrUpdate(ctx.Layout, index)
+                return index
+        }
+
+    member this.Search(req: SearchRequest) : Task<SearchResult> =
+        task {
+            let! index = this.GetIndex()
+
+            let metadata =
+                match searchSourcesCache.TryGetValue ctx.Layout with
+                | (true, sources) -> sources
+                | (false, _) ->
+                    let sources = buildMetadataSources ctx.Layout ctx.UserViews ctx.Permissions
+                    searchSourcesCache.AddOrUpdate(ctx.Layout, sources)
+                    sources
+
+            let kinds = req.Kinds |> Array.map (fun k -> Map.find k searchKinds) |> Set.ofArray
+
+            let regexResult =
+                if req.IsRegex then
+                    try
+                        let options =
+                            if req.CaseSensitive then
+                                RegexOptions.Multiline
+                            else
+                                RegexOptions.Multiline ||| RegexOptions.IgnoreCase
+
+                        Ok(Some(Regex(req.Query, options, regexTimeout)))
+                    with :? ArgumentException as e ->
+                        Error e.Message
+                else
+                    Ok None
+
+            match regexResult with
+            | Error message ->
+                return
+                    { Ok = false
+                      Errors =
+                        [| { Kind = "regex_invalid"
+                             Message = message } |]
+                      Truncated = false
+                      Matches = [||] }
+            | Ok regex ->
+                let found = List<SearchMatch>()
+                let mutable timedOut = false
+
+                use enumerator =
+                    (Seq.append index.JSSources metadata
+                     |> Seq.filter (fun s -> Set.contains s.Item.Kind kinds))
+                        .GetEnumerator()
+
+                while not timedOut && enumerator.MoveNext() do
+                    try
+                        found.AddRange(sourceMatches regex req enumerator.Current)
+                    with SearchTimeout ->
+                        timedOut <- true
+
+                let sorted =
+                    found
+                    |> Seq.sortBy (fun m -> (m.Kind, m.Schema, m.Name, m.Line, m.Column))
+                    |> Seq.toArray
+
+                return
+                    { Ok = not timedOut
+                      Errors =
+                        if timedOut then
+                            [| { Kind = "regex_timeout"
+                                 Message =
+                                   sprintf
+                                       "Regular expression exceeded %i ms on one of the sources"
+                                       (int regexTimeout.TotalMilliseconds) } |]
+                        else
+                            [||]
+                      Truncated = sorted.Length > req.Limit
+                      Matches = Array.truncate req.Limit sorted }
+        }
+
     interface IIntrospectionAPI with
         member this.ValidateQuery req = this.ValidateQuery req
         member this.GetSchemas() = this.GetSchemas()
         member this.GetEntity ref = this.GetEntity ref
         member this.GetDependencies ref field = this.GetDependencies ref field
+        member this.Search req = this.Search req
