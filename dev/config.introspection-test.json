@@ -20,7 +20,8 @@
       "isTemplate": false
     },
     "introspection": {
-      "allowRawSql": true
+      "allowRawSql": true,
+      "allowFullDryRun": true
     }
   }
 }

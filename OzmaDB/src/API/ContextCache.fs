@@ -1302,6 +1302,13 @@ for insert into
                                     Map.empty
                                     cancellationToken
 
+                            // Bounds every statement of the dry run, as it holds the locks until the request ends.
+                            let! _ =
+                                transaction.Connection.Query.ExecuteNonQuery
+                                    "SET LOCAL statement_timeout = '30s'"
+                                    Map.empty
+                                    cancellationToken
+
                             ()
 
                         // Careful here not to evaluate user views before we do migration.

@@ -7,6 +7,7 @@ open System.Threading.Tasks
 open Giraffe
 open Microsoft.AspNetCore.Http
 open Giraffe.EndpointRouting
+open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.DependencyInjection
 
 open OzmaDB.OzmaUtils.Serialization.Utils
@@ -14,6 +15,7 @@ open OzmaDB.Exception
 open OzmaDB.OzmaQL.AST
 open OzmaDB.API.Types
 open OzmaDB.HTTP.Utils
+open OzmaDB.HTTP.Entities
 
 // TODO: make it private after we fix JSON serialization for the private F# types.
 [<SerializeAsObject("error")>]
@@ -21,12 +23,14 @@ type IntrospectionErrorInfo =
     | [<CaseKey("accessDenied")>] IEAccessDenied
     | [<CaseKey("entityNotFound")>] IEEntityNotFound of Entity: string
     | [<CaseKey("fieldNotFound")>] IEFieldNotFound of Field: string
+    | [<CaseKey("fullDryRunDisabled")>] IEFullDryRunDisabled
 
     member this.LogMessage =
         match this with
         | IEAccessDenied -> "Introspection is available only to root"
         | IEEntityNotFound entity -> sprintf "Entity not found: %s" entity
         | IEFieldNotFound field -> sprintf "Field not found: %s" field
+        | IEFullDryRunDisabled -> "full dry-run is disabled for this instance"
 
     [<DataMember>]
     member this.Message = this.LogMessage
@@ -39,6 +43,7 @@ type IntrospectionErrorInfo =
         | IEAccessDenied -> 403
         | IEEntityNotFound _ -> 404
         | IEFieldNotFound _ -> 404
+        | IEFullDryRunDisabled -> 403
 
     static member private LookupKey = prepareLookupCaseKey<IntrospectionErrorInfo>
     member this.Error = IntrospectionErrorInfo.LookupKey this |> Option.get
@@ -75,6 +80,15 @@ type DryRunResponse =
       Ddl: string[]
       BrokenObjects: string[] }
 
+// `ozmaDB:introspection` configuration section.
+type IntrospectionSettings =
+    { // A full dry run holds the migration locks and locks on altered tables while it runs.
+      AllowFullDryRun: bool }
+
+let readIntrospectionSettings (config: IConfiguration) : IntrospectionSettings =
+    let section = config.GetSection("OzmaDB").GetSection("Introspection")
+    { AllowFullDryRun = section.GetValue("AllowFullDryRun", false) }
+
 let private capabilities =
     { Version = 1
       Features = [| "validate"; "schema"; "dependencies"; "search"; "code_check"; "dry_run" |] }
@@ -88,6 +102,9 @@ let private requireRoot (api: IOzmaDBAPI) (f: unit -> Task<HttpJobResponse>) : T
 
 let introspectionApi (serviceProvider: IServiceProvider) : Endpoint list =
     let utils = serviceProvider.GetRequiredService<HttpJobUtils>()
+
+    let settings =
+        readIntrospectionSettings (serviceProvider.GetRequiredService<IConfiguration>())
 
     let getCapabilities =
         utils.PerformReadJob
@@ -247,39 +264,23 @@ let introspectionApi (serviceProvider: IServiceProvider) : Endpoint list =
 
             match mode with
             | None -> requestError (RIRequest "Field mode must be one of: plan, full")
+            | Some DRFull when not settings.AllowFullDryRun ->
+                utils.PerformWriteJob
+                <| fun api -> requireRoot api (fun () -> Task.FromResult(jobError IEFullDryRunDisabled))
             | Some mode ->
                 utils.PerformWriteJob
                 <| fun api ->
                     requireRoot api
                     <| fun () ->
-                        task {
-                            let runOperations () =
-                                task {
-                                    if req.ForceAllowBroken then
-                                        api.Request.Context.SetForceAllowBroken()
+                        let transaction =
+                            { Operations = req.Operations
+                              DeferConstraints = req.DeferConstraints
+                              ForceAllowBroken = req.ForceAllowBroken }
 
-                                    return! api.Entities.RunTransaction { Operations = req.Operations }
-                                }
-
-                            let! transactionRet =
-                                task {
-                                    if not req.DeferConstraints then
-                                        let! ret = runOperations ()
-                                        return Result.mapError id<IErrorDetails> ret
-                                    else
-                                        let! ret = api.Entities.DeferConstraints runOperations
-
-                                        return
-                                            ret
-                                            |> Result.map (Result.mapError id<IErrorDetails>)
-                                            |> Result.mapError id<IErrorDetails>
-                                            |> Result.bind id
-                                }
-
-                            // Nothing is committed: the request transaction is rolled back when the job ends.
-                            match transactionRet with
-                            | Error e -> return jobError e
-                            | Ok ret ->
+                        // Nothing is committed: the request transaction is rolled back when the job ends.
+                        runHTTPTransaction api transaction
+                        <| fun ret ->
+                            task {
                                 let! validation = api.Request.Context.ValidateMigration mode
 
                                 return
@@ -289,7 +290,7 @@ let introspectionApi (serviceProvider: IServiceProvider) : Endpoint list =
                                           Results = ret.Results
                                           Ddl = List.toArray validation.Ddl
                                           BrokenObjects = List.toArray validation.BrokenObjects }
-                        }
+                            }
 
     [ subRoute
           "/introspection"

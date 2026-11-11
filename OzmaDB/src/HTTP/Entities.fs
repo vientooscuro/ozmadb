@@ -1,6 +1,7 @@
 ﻿module OzmaDB.HTTP.Entities
 
 open System
+open System.Threading.Tasks
 open Giraffe
 open Giraffe.EndpointRouting
 open FSharpPlus
@@ -20,6 +21,39 @@ type HTTPTransaction =
 
 // TODO: make it private after we fix JSON serialization for the private F# types.
 type RelatedEntitiesHTTPRequest = { Id: RawRowKey }
+
+// Runs `/transaction` operations; errors are replied as is, `onSuccess` decides whether to commit.
+let runHTTPTransaction
+    (api: IOzmaDBAPI)
+    (transaction: HTTPTransaction)
+    (onSuccess: TransactionResponse -> Task<HttpJobResponse>)
+    : Task<HttpJobResponse> =
+    let runTransactionInner () =
+        task {
+            if transaction.ForceAllowBroken then
+                api.Request.Context.SetForceAllowBroken()
+
+            return! api.Entities.RunTransaction { Operations = transaction.Operations }
+        }
+
+    task {
+        if not transaction.DeferConstraints then
+            match! runTransactionInner () with
+            | Ok ret -> return! onSuccess ret
+            | Error e -> return jobError e
+        else
+            let! ret = api.Entities.DeferConstraints runTransactionInner
+
+            let flatRet =
+                ret
+                |> Result.map (Result.mapError id<IErrorDetails>)
+                |> Result.mapError id<IErrorDetails>
+                |> Result.flatten
+
+            match flatRet with
+            | Ok ret -> return! onSuccess ret
+            | Error e -> return jobError e
+    }
 
 let entitiesApi (serviceProvider: IServiceProvider) : Endpoint list =
     let utils = serviceProvider.GetRequiredService<HttpJobUtils>()
@@ -56,33 +90,11 @@ let entitiesApi (serviceProvider: IServiceProvider) : Endpoint list =
         [ POST [ routef "/%s/%s/related" <| getRef getRelatedEntities ]
           GET [ routef "/%s/%s/info" <| getRef getEntityInfo ] ]
 
-    let runTransactionInner (api: IOzmaDBAPI) (transaction: HTTPTransaction) =
-        task {
-            if transaction.ForceAllowBroken then
-                api.Request.Context.SetForceAllowBroken()
-
-            return! api.Entities.RunTransaction { Operations = transaction.Operations }
-        }
-
     let runTransaction =
         safeBindJson
         <| fun (transaction: HTTPTransaction) ->
             let handler api =
-                task {
-                    if not transaction.DeferConstraints then
-                        let! ret = runTransactionInner api transaction
-                        return! jobReplyWithCommit api ret
-                    else
-                        let! ret = api.Entities.DeferConstraints(fun () -> runTransactionInner api transaction)
-
-                        let flatRet =
-                            ret
-                            |> Result.map (Result.mapError id<IErrorDetails>)
-                            |> Result.mapError id<IErrorDetails>
-                            |> Result.flatten
-
-                        return! jobReplyWithCommit api flatRet
-                }
+                runHTTPTransaction api transaction (fun ret -> commitAndReturn api (fun () -> jobJson ret))
 
             utils.PerformWriteJob handler
 

@@ -42,3 +42,8 @@ tests/introspection/run_server.sh --stop
 
 Set `OZMADB_TEST_URL` to target another server. The suite is skipped if the server is unreachable.
 The `test_schema` fixture creates the `mcp_test` schema and removes it on teardown.
+
+`dev/config.introspection-test.json` sets `ozmaDB.introspection.allowFullDryRun` to `true`, so the `mode: "full"`
+dry-run tests can run. With the default (`false`), `POST /introspection/dry_run` with `mode: "full"` returns 403
+(`full dry-run is disabled for this instance`); that path is not covered by the suite because it needs a server
+started with a different config.
