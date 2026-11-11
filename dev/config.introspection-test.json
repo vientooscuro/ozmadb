@@ -1,0 +1,26 @@
+{
+  "kestrel": {
+    "endpoints": {
+      "http": {
+        "url": "http://127.0.0.1:5099"
+      }
+    }
+  },
+  "ozmaDB": {
+    "authAuthority": "https://127.0.0.1:1/unused",
+    "allowAutoMark": true,
+    "instancesSource": "static",
+    "instance": {
+      "host": "localhost",
+      "port": 5432,
+      "username": "ozmadb_introspection_test",
+      "password": "ozmadb_introspection_test",
+      "database": "ozmadb_introspection_test",
+      "disableSecurity": true,
+      "isTemplate": false
+    },
+    "introspection": {
+      "allowRawSql": true
+    }
+  }
+}

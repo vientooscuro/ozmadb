@@ -23,3 +23,8 @@ project.lock.json
 out/
 
 .fake
+
+# Python test harness
+tests/introspection/.venv/
+.pytest_cache/
+__pycache__/

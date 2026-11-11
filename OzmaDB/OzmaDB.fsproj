@@ -170,6 +170,7 @@
     <Compile Include="src/API/Actions.fs" />
     <Compile Include="src/API/Permissions.fs" />
     <Compile Include="src/API/Domains.fs" />
+    <Compile Include="src/API/Introspection.fs" />
     <Compile Include="src/API/API.fs" />
 
     <Compile Include="src/HTTP/RateLimit.fs" />
@@ -182,6 +183,7 @@
     <Compile Include="src/HTTP/SaveRestore.fs" />
     <Compile Include="src/HTTP/Permissions.fs" />
     <Compile Include="src/HTTP/Domains.fs" />
+    <Compile Include="src/HTTP/Introspection.fs" />
     <Compile Include="src/TimeTriggersWorker.fs" />
     <Compile Include="src/OutboxWorker.fs" />
 

@@ -40,6 +40,7 @@ open OzmaDB.Operations.Command
 module SQL = OzmaDB.SQL.AST
 module SQL = OzmaDB.SQL.DDL
 module SQL = OzmaDB.SQL.Query
+module SQL = OzmaDB.SQL.Typecheck
 
 [<SerializeAsObject("error")>]
 type GenericErrorInfo =
@@ -114,6 +115,7 @@ type IContext =
     abstract member DefaultAttrs: MergedDefaultAttributes
     abstract member Triggers: MergedTriggers
     abstract member Domains: LayoutDomains
+    abstract member PgFunctions: Map<SQL.SQLName, SQL.FunctionSignaturesMap>
 
     abstract member CancellationToken: CancellationToken with get, set
     // Cancellation token that is used to commit all changes.
@@ -994,6 +996,51 @@ type IDomainsAPI =
     abstract member GetDomainValues: GetDomainValuesRequest -> Task<Result<DomainValuesResponse, DomainErrorInfo>>
     abstract member GetDomainExplain: GetDomainExplainRequest -> Task<Result<ExplainedQuery, DomainErrorInfo>>
 
+type ValidateQueryRequest =
+    { Query: string
+      [<DataMember(EmitDefaultValue = false)>]
+      HomeSchema: SchemaName option }
+
+type ValidateErrorKind =
+    | [<CaseKey("parse")>] VEKParse
+    | [<CaseKey("resolve")>] VEKResolve
+    | [<CaseKey("compile")>] VEKCompile
+
+type ValidateErrorItem =
+    { Message: string
+      Kind: ValidateErrorKind
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      Line: int option
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      Column: int option
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      Path: string option }
+
+type ValidateColumn =
+    { Name: string
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      ValueType: string option }
+
+type ValidateArgument =
+    { Name: string
+      ArgType: string
+      Optional: bool }
+
+// Absent values are sent as explicit `null`s, overriding the global `NullValueHandling.Ignore`.
+[<NoEquality; NoComparison>]
+type ValidateResult =
+    { Ok: bool
+      Errors: ValidateErrorItem[]
+      Columns: ValidateColumn[]
+      Arguments: ValidateArgument[]
+      // Schema -> entity -> sorted field names.
+      Used: Map<string, Map<string, string[]>>
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      Sql: string option }
+
+type IIntrospectionAPI =
+    abstract member ValidateQuery: ValidateQueryRequest -> Task<ValidateResult>
+
 type IOzmaDBAPI =
     abstract member Request: IRequestContext
     abstract member UserViews: IUserViewsAPI
@@ -1002,6 +1049,7 @@ type IOzmaDBAPI =
     abstract member Actions: IActionsAPI
     abstract member Permissions: IPermissionsAPI
     abstract member Domains: IDomainsAPI
+    abstract member Introspection: IIntrospectionAPI
 
 let dummyOzmaDBAPI =
     { new IOzmaDBAPI with
@@ -1011,7 +1059,8 @@ let dummyOzmaDBAPI =
         member this.SaveRestore = failwith "Attempted to access dummy API"
         member this.Actions = failwith "Attempted to access dummy API"
         member this.Permissions = failwith "Attempted to access dummy API"
-        member this.Domains = failwith "Attempted to access dummy API" }
+        member this.Domains = failwith "Attempted to access dummy API"
+        member this.Introspection = failwith "Attempted to access dummy API" }
 
 type EmptyRequest =
     new() = { }

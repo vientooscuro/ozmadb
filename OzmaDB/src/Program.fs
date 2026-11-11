@@ -45,6 +45,7 @@ open OzmaDB.HTTP.SaveRestore
 open OzmaDB.HTTP.Actions
 open OzmaDB.HTTP.Permissions
 open OzmaDB.HTTP.Domains
+open OzmaDB.HTTP.Introspection
 open OzmaDB.HTTP.RateLimit
 open OzmaDB.HTTP.Utils
 open OzmaDB.Operations.Preload
@@ -293,7 +294,8 @@ let private appEndpoints (serviceProvider: IServiceProvider) : Endpoint list =
           actionsApi serviceProvider
           infoApi serviceProvider
           permissionsApi serviceProvider
-          domainsApi serviceProvider ]
+          domainsApi serviceProvider
+          introspectionApi serviceProvider ]
 
 let private isDebug =
 #if DEBUG

@@ -7,6 +7,7 @@ open OzmaDB.API.SaveRestore
 open OzmaDB.API.Actions
 open OzmaDB.API.Permissions
 open OzmaDB.API.Domains
+open OzmaDB.API.Introspection
 
 type OzmaDBAPI(rctx: IRequestContext) as this =
     let uv = lazy (UserViewsAPI this)
@@ -15,6 +16,7 @@ type OzmaDBAPI(rctx: IRequestContext) as this =
     let actions = lazy (ActionsAPI this)
     let permissions = lazy (PermissionsAPI this)
     let domains = lazy (DomainsAPI this)
+    let introspection = lazy (IntrospectionAPI this)
 
     do rctx.Context.SetAPI this
 
@@ -24,6 +26,7 @@ type OzmaDBAPI(rctx: IRequestContext) as this =
     member this.Actions = actions.Value
     member this.Permissions = permissions.Value
     member this.Domains = domains.Value
+    member this.Introspection = introspection.Value
 
     interface IOzmaDBAPI with
         member this.Request = rctx
@@ -33,3 +36,4 @@ type OzmaDBAPI(rctx: IRequestContext) as this =
         member this.Actions = actions.Value :> IActionsAPI
         member this.Permissions = permissions.Value :> IPermissionsAPI
         member this.Domains = domains.Value :> IDomainsAPI
+        member this.Introspection = introspection.Value :> IIntrospectionAPI

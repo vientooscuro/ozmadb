@@ -1692,6 +1692,7 @@ for insert into
                         member this.DefaultAttrs = oldState.Context.DefaultAttrs
                         member this.Triggers = oldState.Context.Triggers
                         member this.Domains = oldState.Context.Domains
+                        member this.PgFunctions = oldState.Context.PgFunctions
 
                         member this.Commit() = commit ()
                         member this.ScheduleMigration() = needMigration <- true
