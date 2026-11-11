@@ -1,3 +1,6 @@
+from conftest import insert, query_rows, run_transaction
+
+
 def get_schema(api):
     resp = api.get("/introspection/schema")
     assert resp.status_code == 200, resp.text
@@ -85,3 +88,42 @@ def test_entity_check_constraint(api, test_schema):
 def test_entity_unique_constraint(api, test_schema):
     uniques = {c["name"]: c for c in get_entity(api, "mcp_test", "orders").json()["uniqueConstraints"]}
     assert uniques["unique_parent_ref"]["columns"] == ["parent_ref"]
+
+
+def test_entity_expressions_are_stored_source(api, test_schema):
+    body = get_entity(api, "mcp_test", "parent").json()
+    computed = {f["name"]: f for f in body["computedFields"]}["double_amount"]
+    assert computed["expression"] == "amount * 2"
+    assert "amount" in computed["resolvedExpression"]
+    assert computed["isBroken"] is False
+    assert computed["error"] is None
+    check = {c["name"]: c for c in body["checkConstraints"]}["amount_non_negative"]
+    assert check["expression"] == "amount >= 0"
+    assert "amount" in check["resolvedExpression"]
+    child = {f["name"]: f for f in get_entity(api, "mcp_test", "child").json()["computedFields"]}
+    assert child["double_amount"]["expression"] == "amount * 2"
+
+
+def test_entity_includes_broken_computed_field(api, test_schema):
+    orders_id = query_rows(
+        api, "select id from public.entities where schema_id=>name = 'mcp_test' and name = 'orders'"
+    )[0][0]
+    field_id = insert(
+        api,
+        "public",
+        "computed_fields",
+        {"entity_id": orders_id, "name": "broken_calc", "expression": "no_such_column + 1", "allow_broken": True},
+    )
+    try:
+        computed = {f["name"]: f for f in get_entity(api, "mcp_test", "orders").json()["computedFields"]}
+        broken = computed["broken_calc"]
+        assert broken["isBroken"] is True
+        assert broken["error"]
+        assert broken["expression"] == "no_such_column + 1"
+        assert broken["resolvedExpression"] is None
+        assert broken["isVirtual"] is False
+        assert broken["inheritedFrom"] is None
+    finally:
+        run_transaction(
+            api, [{"type": "delete", "entity": {"schema": "public", "name": "computed_fields"}, "id": field_id}]
+        )

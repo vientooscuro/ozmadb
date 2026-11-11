@@ -216,6 +216,27 @@ def test_sql_deep_json_falls_back_to_text(api):
     assert ret["rows"] == [["[" * 100 + "]" * 100]]
 
 
+def test_sql_null_cells_count_toward_result_size(api):
+    columns = ", ".join(f"null::int as c{i}" for i in range(300))
+    ret = run_sql(api, f"select {columns} from generate_series(1, 5000)", maxRows=5000, timeoutMs=30000)
+    assert ret["ok"] is True, ret["errors"]
+    assert ret["truncated"] is True
+    assert [e["kind"] for e in ret["errors"]] == ["result_too_large"]
+    assert 0 < len(ret["rows"]) < 5000
+
+
+def test_sql_large_json_returned_as_text(api):
+    ret = run_sql(api, "select jsonb_build_object('a', repeat('x', 70000)) as big, '{\"a\": 1}'::jsonb as small")
+    assert ret["ok"] is True, ret["errors"]
+    assert ret["columns"] == [
+        {"name": "big", "pgType": "jsonb", "jsonAsText": True},
+        {"name": "small", "pgType": "jsonb"},
+    ]
+    [[big, small]] = ret["rows"]
+    assert isinstance(big, str) and big.startswith('{"a": "xxx')
+    assert small == {"a": 1}
+
+
 def superuser_psql(query: str) -> None:
     if shutil.which("psql") is None:
         pytest.skip("psql is required")
@@ -254,6 +275,16 @@ def test_sql_unavailable_for_member_of_privileged_role(api):
         assert resp.status_code == 403, resp.text
     finally:
         superuser_psql("drop role if exists mcp_sql_bypass")
+    assert run_sql(api, "select 1")["ok"] is True
+
+
+def test_sql_unavailable_for_member_of_pg_signal_backend(api):
+    superuser_psql("grant pg_signal_backend to ozmadb_introspection_test")
+    try:
+        resp = api.post("/introspection/sql", json={"sql": "select 1"})
+        assert resp.status_code == 403, resp.text
+    finally:
+        superuser_psql("revoke pg_signal_backend from ozmadb_introspection_test")
     assert run_sql(api, "select 1")["ok"] is True
 
 

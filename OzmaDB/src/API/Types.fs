@@ -1084,15 +1084,24 @@ type EntityColumnField =
       [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
       InheritedFrom: string option }
 
+// `Expression` is the stored source text, `ResolvedExpression` its resolved rendering.
 type EntityComputedField =
     { Name: string
       Expression: string
       IsVirtual: bool
       IsMaterialized: bool
       [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
-      InheritedFrom: string option }
+      InheritedFrom: string option
+      IsBroken: bool
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      Error: string option
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      ResolvedExpression: string option }
 
-type EntityCheckConstraint = { Name: string; Expression: string }
+type EntityCheckConstraint =
+    { Name: string
+      Expression: string
+      ResolvedExpression: string }
 
 type EntityUniqueConstraint = { Name: string; Columns: string[] }
 
@@ -1194,7 +1203,12 @@ type SqlQueryRequest =
       TimeoutMs: int
       MaxRows: int }
 
-type SqlColumn = { Name: string; PgType: string }
+type SqlColumn =
+    { Name: string
+      PgType: string
+      // `Some true` when some json/jsonb values of the column are returned as strings because of their size.
+      [<DataMember(EmitDefaultValue = false)>]
+      JsonAsText: bool option }
 
 [<NoEquality; NoComparison>]
 type SqlQueryResult =

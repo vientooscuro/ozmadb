@@ -15,11 +15,13 @@ open NpgsqlTypes
 
 open OzmaDB.OzmaUtils
 open OzmaDB.Exception
+open OzmaDB.Objects.Types
 open OzmaDB.OzmaQL.AST
 open OzmaDB.OzmaQL.Resolve
 open OzmaDB.OzmaQL.Compile
 open OzmaDB.OzmaQL.UsedReferences
 open OzmaDB.OzmaQL.Optimize
+open OzmaDB.Layout.Source
 open OzmaDB.Layout.Types
 open OzmaDB.UserViews.Types
 open OzmaDB.UserViews.Resolve
@@ -135,7 +137,33 @@ let private fieldTypeString (t: ResolvedFieldType) =
     | FTScalar s -> scalarTypeString s
     | FTArray s -> sprintf "array(%s)" (scalarTypeString s)
 
-let private entityDetails (ref: ResolvedEntityRef) (entity: ResolvedEntity) : EntityDetails =
+// Stored (unresolved) layout. Every state version change produces a new layout, so it is loaded once per layout.
+let private sourceLayoutCache = ConditionalWeakTable<Layout, SourceLayout>()
+
+let private getSourceLayout (ctx: IContext) : Task<SourceLayout> =
+    task {
+        match sourceLayoutCache.TryGetValue ctx.Layout with
+        | (true, source) -> return source
+        | (false, _) ->
+            let! source = LayoutSchema.buildSchemaLayout ctx.Transaction.System None ctx.CancellationToken
+            sourceLayoutCache.AddOrUpdate(ctx.Layout, source)
+            return source
+    }
+
+// Finds a stored object in the entity or the ancestor that declares it.
+let rec private findStored
+    (source: SourceLayout)
+    (ref: ResolvedEntityRef)
+    (get: SourceEntity -> 'a option)
+    : (ResolvedEntityRef * 'a) option =
+    match source.FindEntity ref with
+    | None -> None
+    | Some entity ->
+        match get entity with
+        | Some value -> Some(ref, value)
+        | None -> entity.Parent |> Option.bind (fun parent -> findStored source parent get)
+
+let private entityDetails (source: SourceLayout) (ref: ResolvedEntityRef) (entity: ResolvedEntity) : EntityDetails =
     let sortedNames (names: seq<string>) = names |> Seq.sort |> Seq.toArray
 
     let columnField (name: FieldName, field: ResolvedColumnField) =
@@ -146,12 +174,47 @@ let private entityDetails (ref: ResolvedEntityRef) (entity: ResolvedEntity) : En
           IsImmutable = field.IsImmutable
           InheritedFrom = field.InheritedFrom |> Option.map entityRefString }
 
-    let computedField (name: FieldName, field: ResolvedComputedField) =
+    let computedField (name: FieldName, field: PossiblyBroken<ResolvedComputedField>) =
+        let stored = findStored source ref (fun e -> Map.tryFind name e.ComputedFields)
+
+        match field with
+        | Ok field ->
+            let resolved = field.Expression.ToOzmaQLString()
+
+            { Name = string name
+              Expression =
+                stored
+                |> Option.map (fun (_, f) -> f.Expression)
+                |> Option.defaultValue resolved
+              IsVirtual = Option.isSome field.Virtual
+              IsMaterialized = field.IsMaterialized
+              InheritedFrom = field.InheritedFrom |> Option.map entityRefString
+              IsBroken = false
+              Error = None
+              ResolvedExpression = Some resolved }
+        | Error broken ->
+            { Name = string name
+              Expression = stored |> Option.map (fun (_, f) -> f.Expression) |> Option.defaultValue ""
+              IsVirtual = stored |> Option.exists (fun (_, f) -> f.IsVirtual)
+              IsMaterialized = stored |> Option.exists (fun (_, f) -> f.IsMaterialized)
+              InheritedFrom =
+                stored
+                |> Option.map fst
+                |> Option.filter (fun declaring -> declaring <> ref)
+                |> Option.map entityRefString
+              IsBroken = true
+              Error = Some(fullUserMessage broken.Error)
+              ResolvedExpression = None }
+
+    let checkConstraint (name: ConstraintName, constr: ResolvedCheckConstraint) =
+        let resolved = constr.Expression.ToOzmaQLString()
+
         { Name = string name
-          Expression = field.Expression.ToOzmaQLString()
-          IsVirtual = Option.isSome field.Virtual
-          IsMaterialized = field.IsMaterialized
-          InheritedFrom = field.InheritedFrom |> Option.map entityRefString }
+          Expression =
+            findStored source ref (fun e -> Map.tryFind name e.CheckConstraints)
+            |> Option.map (fun (_, c) -> c.Expression)
+            |> Option.defaultValue resolved
+          ResolvedExpression = resolved }
 
     let referenceTarget (field: ResolvedColumnField) =
         match field.FieldType with
@@ -169,18 +232,8 @@ let private entityDetails (ref: ResolvedEntityRef) (entity: ResolvedEntity) : En
         |> sortedNames
       MainField = string entity.MainField
       ColumnFields = entity.ColumnFields |> Map.toSeq |> Seq.map columnField |> Seq.toArray
-      ComputedFields =
-        entity.ComputedFields
-        |> Map.toSeq
-        |> Seq.mapMaybe (fun (name, field) -> Result.getOption field |> Option.map (fun f -> computedField (name, f)))
-        |> Seq.toArray
-      CheckConstraints =
-        entity.CheckConstraints
-        |> Map.toSeq
-        |> Seq.map (fun (name, c) ->
-            { Name = string name
-              Expression = c.Expression.ToOzmaQLString() })
-        |> Seq.toArray
+      ComputedFields = entity.ComputedFields |> Map.toSeq |> Seq.map computedField |> Seq.toArray
+      CheckConstraints = entity.CheckConstraints |> Map.toSeq |> Seq.map checkConstraint |> Seq.toArray
       UniqueConstraints =
         entity.UniqueConstraints
         |> Map.toSeq
@@ -432,7 +485,7 @@ let private searchSourcesCache = ConditionalWeakTable<Layout, JSSource[]>()
 let private loadMetadataSources (ctx: IContext) : Task<JSSource[]> =
     task {
         let system = ctx.Transaction.System
-        let! layout = LayoutSchema.buildSchemaLayout system None ctx.CancellationToken
+        let! layout = getSourceLayout ctx
         let! userViews = UserViewsSchema.buildSchemaUserViews system None ctx.CancellationToken
         let! permissions = PermissionsSchema.buildSchemaPermissions system None ctx.CancellationToken
 
@@ -610,16 +663,21 @@ let private sqlWrapperPrefix = "SELECT * FROM ("
 // Text read from PostgreSQL, in characters: per value and per response.
 let private maxSqlValueLength = 1024 * 1024
 let private maxSqlResultLength = 16 * 1024 * 1024
+// Charged per cell, NULLs included, so that many tiny cells still count toward the response limit.
+let private sqlCellCost = 16
+// Larger json/jsonb values are returned as strings instead of being parsed into a token tree.
+let private maxParsedJsonLength = 64 * 1024
 let private truncatedValueMarker = "…[truncated]"
 
 // Membership, not just inheritance: `set_config('role', ...)` can switch to any role the user is a member of.
 let private unsafeDatabaseQuery =
-    """SELECT EXISTS (SELECT FROM pg_extension WHERE extname IN ('dblink', 'postgres_fdw'))
+    """SELECT EXISTS (SELECT FROM pg_catalog.pg_extension WHERE extname IN ('dblink', 'postgres_fdw'))
 OR EXISTS (
-  SELECT FROM pg_roles r
+  SELECT FROM pg_catalog.pg_roles r
   WHERE (r.rolsuper OR r.rolreplication OR r.rolbypassrls
-         OR r.rolname IN ('pg_read_server_files', 'pg_write_server_files', 'pg_execute_server_program'))
-    AND pg_has_role(current_user, r.oid, 'MEMBER'))"""
+         OR r.rolname IN ('pg_read_server_files', 'pg_write_server_files', 'pg_execute_server_program',
+                          'pg_signal_backend'))
+    AND pg_catalog.pg_has_role(current_user, r.oid, 'MEMBER'))"""
 
 let private pgReportTimeoutMs = 10000
 let private pgReportMaxRows = 5000
@@ -800,7 +858,13 @@ let private runWrappedQuery (ctx: IContext) (query: string) (pars: SqlParam[]) (
             let columns =
                 Array.init reader.FieldCount (fun i ->
                     { Name = reader.GetName i
-                      PgType = reader.GetDataTypeName i })
+                      PgType = reader.GetDataTypeName i
+                      JsonAsText = None })
+
+            let isJsonColumn =
+                columns |> Array.map (fun c -> c.PgType = "json" || c.PgType = "jsonb")
+
+            let jsonAsText = Array.create columns.Length false
 
             // Reads at most `maxSqlValueLength + 1` characters; the rest of the value is skipped by the reader.
             let readText (i: int) : Task<string * bool> =
@@ -841,6 +905,7 @@ let private runWrappedQuery (ctx: IContext) (query: string) (pars: SqlParam[]) (
 
                     while not tooLarge && i < columns.Length do
                         let! isNull = reader.IsDBNullAsync(i, ctx.CancellationToken)
+                        totalLength <- totalLength + int64 sqlCellCost
 
                         if isNull then
                             row.[i] <- JValue.CreateNull()
@@ -848,9 +913,14 @@ let private runWrappedQuery (ctx: IContext) (query: string) (pars: SqlParam[]) (
                             let! (text, cut) = readText i
                             totalLength <- totalLength + int64 text.Length
 
+                            if isJsonColumn.[i] && (cut || text.Length > maxParsedJsonLength) then
+                                jsonAsText.[i] <- true
+
                             row.[i] <-
                                 if cut then
                                     JValue(text + truncatedValueMarker) :> JToken
+                                else if isJsonColumn.[i] && text.Length > maxParsedJsonLength then
+                                    JValue(text) :> JToken
                                 else
                                     sqlTextValue columns.[i].PgType text
 
@@ -868,14 +938,24 @@ let private runWrappedQuery (ctx: IContext) (query: string) (pars: SqlParam[]) (
                 { Ok = true
                   Errors =
                     if tooLarge then
-                        [| { Message = sprintf "Result exceeds %i characters, the rest is omitted" maxSqlResultLength
+                        [| { Message =
+                               sprintf
+                                   "Result exceeds %i characters (each cell also counts as %i), the rest is omitted"
+                                   maxSqlResultLength
+                                   sqlCellCost
                              Kind = VEKResultTooLarge
                              Line = None
                              Column = None
                              Path = None } |]
                     else
                         [||]
-                  Columns = columns
+                  Columns =
+                    columns
+                    |> Array.mapi (fun i c ->
+                        if jsonAsText.[i] then
+                            { c with JsonAsText = Some true }
+                        else
+                            c)
                   Rows = rows.ToArray()
                   Truncated = truncated }
         with :? PostgresException as e ->
@@ -934,7 +1014,13 @@ type IntrospectionAPI(api: IOzmaDBAPI) =
         }
 
     member this.GetEntity(ref: ResolvedEntityRef) : Task<EntityDetails option> =
-        task { return ctx.Layout.FindEntity ref |> Option.map (entityDetails ref) }
+        task {
+            match ctx.Layout.FindEntity ref with
+            | None -> return None
+            | Some entity ->
+                let! source = getSourceLayout ctx
+                return Some(entityDetails source ref entity)
+        }
 
     member this.GetDependencies
         (entityRef: ResolvedEntityRef)
