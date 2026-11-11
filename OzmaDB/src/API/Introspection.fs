@@ -16,6 +16,7 @@ open OzmaDB.OzmaQL.Optimize
 open OzmaDB.Layout.Types
 open OzmaDB.UserViews.Types
 open OzmaDB.UserViews.Resolve
+open OzmaDB.JavaScript.Runtime
 open OzmaDB.API.Types
 
 type private MutableHashSet<'a> = System.Collections.Generic.HashSet<'a>
@@ -777,9 +778,31 @@ type IntrospectionAPI(api: IOzmaDBAPI) =
                       Matches = Array.truncate req.Limit sorted }
         }
 
+    // Actions, triggers and modules are all loaded as ES modules, so they are all checked as such.
+    member this.CheckCode(req: CodeCheckRequest) : Task<CodeCheckResult> =
+        task {
+            match JSEngine.CheckSyntax(req.Source, true) with
+            | Ok() ->
+                return
+                    { Ok = true
+                      Errors = [||]
+                      Warnings = [||] }
+            | Error e ->
+                return
+                    { Ok = false
+                      Errors =
+                        [| { Message = e.Message
+                             Kind = VEKSyntax
+                             Line = e.Line
+                             Column = e.Column
+                             Path = None } |]
+                      Warnings = [||] }
+        }
+
     interface IIntrospectionAPI with
         member this.ValidateQuery req = this.ValidateQuery req
         member this.GetSchemas() = this.GetSchemas()
         member this.GetEntity ref = this.GetEntity ref
         member this.GetDependencies ref field = this.GetDependencies ref field
         member this.Search req = this.Search req
+        member this.CheckCode req = this.CheckCode req

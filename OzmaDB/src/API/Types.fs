@@ -1005,6 +1005,7 @@ type ValidateErrorKind =
     | [<CaseKey("parse")>] VEKParse
     | [<CaseKey("resolve")>] VEKResolve
     | [<CaseKey("compile")>] VEKCompile
+    | [<CaseKey("syntax")>] VEKSyntax
 
 type ValidateErrorItem =
     { Message: string
@@ -1146,6 +1147,16 @@ type SearchResult =
       Truncated: bool
       Matches: SearchMatch[] }
 
+// Accepted `kind` values of a code check; all of them are loaded as ES modules.
+let codeCheckKinds = set [ "action"; "trigger"; "module" ]
+
+type CodeCheckRequest = { Kind: string; Source: string }
+
+type CodeCheckResult =
+    { Ok: bool
+      Errors: ValidateErrorItem[]
+      Warnings: string[] }
+
 type IIntrospectionAPI =
     abstract member ValidateQuery: ValidateQueryRequest -> Task<ValidateResult>
     abstract member GetSchemas: unit -> Task<SchemaSummary[]>
@@ -1155,6 +1166,7 @@ type IIntrospectionAPI =
         ResolvedEntityRef -> FieldName option -> Task<Result<DependenciesResult, DependenciesError>>
 
     abstract member Search: SearchRequest -> Task<SearchResult>
+    abstract member CheckCode: CodeCheckRequest -> Task<CodeCheckResult>
 
 type IOzmaDBAPI =
     abstract member Request: IRequestContext

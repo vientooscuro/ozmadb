@@ -403,6 +403,24 @@ let private getJSExceptionUserData (obj: IJavaScriptObject) : JToken option =
         with :? JsonReaderException as e ->
             raisefWithInner JavaScriptRuntimeException e "Failed to parse user data"
 
+type JSSyntaxError =
+    { Message: string
+      Line: int option
+      Column: int option }
+
+let private syntaxCheckDocumentName = "check.js"
+
+let private syntaxCheckHeapSize = 64 * 1024 * 1024
+
+// V8 reports the location as "    at check.js:LINE:COLUMN -> source line", both 1-based.
+let private syntaxErrorPositionRegex =
+    Text.RegularExpressions.Regex(
+        @"^\s*at "
+        + Text.RegularExpressions.Regex.Escape syntaxCheckDocumentName
+        + @":(\d+):(\d+)",
+        Text.RegularExpressions.RegexOptions.Multiline
+    )
+
 [<DefaultScriptUsage(ScriptAccess.None)>]
 type JSEngine(runtime: JSRuntime, env: JSEnvironment) as this =
     let engine =
@@ -798,6 +816,43 @@ type JSEngine(runtime: JSRuntime, env: JSEnvironment) as this =
         match jsModule.GetProperty("default") with
         | :? IJavaScriptObject as obj when obj.Kind = JavaScriptObjectKind.Function -> obj
         | _ -> raisef JavaScriptRuntimeException "Invalid default function"
+
+    // Compiling a module only parses it: top-level code is not run and imports are not resolved.
+    // A dedicated runtime keeps the request engines' compilation caches untouched.
+    static member CheckSyntax(source: string, isModule: bool) : Result<unit, JSSyntaxError> =
+        let constraints =
+            new V8RuntimeConstraints(
+                MaxArrayBufferAllocation = 0UL,
+                HeapExpansionMultiplier = 2,
+                MaxOldSpaceSize = 2 * syntaxCheckHeapSize / (1024 * 1024)
+            )
+
+        use runtime = new V8Runtime(constraints)
+        runtime.MaxHeapSize <- UIntPtr.CreateChecked syntaxCheckHeapSize
+
+        let info =
+            if isModule then
+                DocumentInfo(syntaxCheckDocumentName, Category = ModuleCategory.Standard)
+            else
+                DocumentInfo(syntaxCheckDocumentName)
+
+        try
+            use script = runtime.Compile(info, source)
+            Ok()
+        with :? ScriptEngineException as e ->
+            let m =
+                syntaxErrorPositionRegex.Match(if isNull e.ErrorDetails then "" else e.ErrorDetails)
+
+            let (line, column) =
+                if m.Success then
+                    (Some(int m.Groups.[1].Value), Some(int m.Groups.[2].Value))
+                else
+                    (None, None)
+
+            Error
+                { Message = e.Message
+                  Line = line
+                  Column = column }
 
     member this.Engine = engine
     member this.Runtime = runtime

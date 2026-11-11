@@ -2,6 +2,7 @@ module OzmaDB.HTTP.Introspection
 
 open System
 open System.Runtime.Serialization
+open System.Text
 open System.Threading.Tasks
 open Giraffe
 open Microsoft.AspNetCore.Http
@@ -57,7 +58,9 @@ type CapabilitiesResponse = { Version: int; Features: string[] }
 
 let private capabilities =
     { Version = 1
-      Features = [| "validate"; "schema"; "dependencies"; "search" |] }
+      Features = [| "validate"; "schema"; "dependencies"; "search"; "code_check" |] }
+
+let private maxCodeCheckSourceSize = 1024 * 1024
 
 let private requireRoot (api: IOzmaDBAPI) (f: unit -> Task<HttpJobResponse>) : Task<HttpJobResponse> =
     match api.Request.User.Effective.Type with
@@ -194,6 +197,25 @@ let introspectionApi (serviceProvider: IServiceProvider) : Endpoint list =
         | _, _, _, Error e, _
         | _, _, _, _, Error e -> requestError (RIRequest e) next ctx
 
+    let checkCode =
+        safeBindJson
+        <| fun (req: CodeCheckRequest) ->
+            if isNull req.Kind || not (Set.contains req.Kind codeCheckKinds) then
+                requestError (RIRequest "Field kind must be one of: action, trigger, module")
+            else if isNull req.Source then
+                requestError (RIRequest "Field source is required")
+            else if Encoding.UTF8.GetByteCount req.Source > maxCodeCheckSourceSize then
+                requestError (RIRequest(sprintf "Field source must not exceed %i bytes" maxCodeCheckSourceSize))
+            else
+                utils.PerformReadJob
+                <| fun api ->
+                    requireRoot api
+                    <| fun () ->
+                        task {
+                            let! ret = api.Introspection.CheckCode req
+                            return jobJson ret
+                        }
+
     [ subRoute
           "/introspection"
           [ GET [ route "/capabilities" getCapabilities ]
@@ -201,4 +223,5 @@ let introspectionApi (serviceProvider: IServiceProvider) : Endpoint list =
             GET [ routef "/schema/%s/%s" getEntity ]
             GET [ route "/dependencies" getDependencies ]
             GET [ route "/search" search ]
-            POST [ route "/funql/validate" validateQuery ] ] ]
+            POST [ route "/funql/validate" validateQuery ]
+            POST [ route "/code/check" checkCode ] ] ]
