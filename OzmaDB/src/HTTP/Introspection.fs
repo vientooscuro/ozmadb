@@ -56,9 +56,28 @@ type IntrospectionErrorInfo =
 // TODO: make it private after we fix JSON serialization for the private F# types.
 type CapabilitiesResponse = { Version: int; Features: string[] }
 
+// Same shape as the `/transaction` body plus an optional `mode`.
+// TODO: make it private after we fix JSON serialization for the private F# types.
+[<NoEquality; NoComparison>]
+type DryRunHTTPRequest =
+    { Operations: TransactionOp[]
+      DeferConstraints: bool
+      ForceAllowBroken: bool
+      [<DataMember(EmitDefaultValue = false)>]
+      Mode: string option }
+
+// TODO: make it private after we fix JSON serialization for the private F# types.
+[<NoEquality; NoComparison>]
+type DryRunResponse =
+    { Ok: bool
+      Errors: ValidateErrorItem[]
+      Results: TransactionOpResponse[]
+      Ddl: string[]
+      BrokenObjects: string[] }
+
 let private capabilities =
     { Version = 1
-      Features = [| "validate"; "schema"; "dependencies"; "search"; "code_check" |] }
+      Features = [| "validate"; "schema"; "dependencies"; "search"; "code_check"; "dry_run" |] }
 
 let private maxCodeCheckSourceSize = 1024 * 1024
 
@@ -216,6 +235,62 @@ let introspectionApi (serviceProvider: IServiceProvider) : Endpoint list =
                             return jobJson ret
                         }
 
+    let dryRun =
+        safeBindJson
+        <| fun (req: DryRunHTTPRequest) ->
+            let mode =
+                match req.Mode with
+                | None
+                | Some "plan" -> Some DRPlan
+                | Some "full" -> Some DRFull
+                | _ -> None
+
+            match mode with
+            | None -> requestError (RIRequest "Field mode must be one of: plan, full")
+            | Some mode ->
+                utils.PerformWriteJob
+                <| fun api ->
+                    requireRoot api
+                    <| fun () ->
+                        task {
+                            let runOperations () =
+                                task {
+                                    if req.ForceAllowBroken then
+                                        api.Request.Context.SetForceAllowBroken()
+
+                                    return! api.Entities.RunTransaction { Operations = req.Operations }
+                                }
+
+                            let! transactionRet =
+                                task {
+                                    if not req.DeferConstraints then
+                                        let! ret = runOperations ()
+                                        return Result.mapError id<IErrorDetails> ret
+                                    else
+                                        let! ret = api.Entities.DeferConstraints runOperations
+
+                                        return
+                                            ret
+                                            |> Result.map (Result.mapError id<IErrorDetails>)
+                                            |> Result.mapError id<IErrorDetails>
+                                            |> Result.bind id
+                                }
+
+                            // Nothing is committed: the request transaction is rolled back when the job ends.
+                            match transactionRet with
+                            | Error e -> return jobError e
+                            | Ok ret ->
+                                let! validation = api.Request.Context.ValidateMigration mode
+
+                                return
+                                    jobJson
+                                        { Ok = validation.Ok
+                                          Errors = List.toArray validation.Errors
+                                          Results = ret.Results
+                                          Ddl = List.toArray validation.Ddl
+                                          BrokenObjects = List.toArray validation.BrokenObjects }
+                        }
+
     [ subRoute
           "/introspection"
           [ GET [ route "/capabilities" getCapabilities ]
@@ -224,4 +299,5 @@ let introspectionApi (serviceProvider: IServiceProvider) : Endpoint list =
             GET [ route "/dependencies" getDependencies ]
             GET [ route "/search" search ]
             POST [ route "/funql/validate" validateQuery ]
-            POST [ route "/code/check" checkCode ] ] ]
+            POST [ route "/code/check" checkCode ]
+            POST [ route "/dry_run" dryRun ] ] ]
