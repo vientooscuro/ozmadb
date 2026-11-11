@@ -92,6 +92,90 @@ let private successResult (layout: Layout) (uv: ResolvedUserView) : ValidateResu
       Used = usedToMap used.UsedDatabase
       Sql = Some(uv.Compiled.Query.Expression.ToSQLString()) }
 
+let private entityRefString (ref: ResolvedEntityRef) =
+    sprintf "%s.%s" (string ref.Schema) (string ref.Name)
+
+// The stock printer quotes every name, so references are rendered by hand.
+let private scalarTypeString (t: ScalarFieldType<ResolvedEntityRef>) =
+    match t with
+    | SFTReference(target, onDelete) ->
+        let onDeleteStr =
+            match onDelete with
+            | None -> ""
+            | Some action -> sprintf " ON DELETE %s" (action.ToOzmaQLString())
+
+        sprintf "reference(%s)%s" (entityRefString target) onDeleteStr
+    | _ -> t.ToOzmaQLString()
+
+let private fieldTypeString (t: ResolvedFieldType) =
+    match t with
+    | FTScalar s -> scalarTypeString s
+    | FTArray s -> sprintf "array(%s)" (scalarTypeString s)
+
+let private entityDetails (ref: ResolvedEntityRef) (entity: ResolvedEntity) : EntityDetails =
+    let sortedNames (names: seq<string>) = names |> Seq.sort |> Seq.toArray
+
+    let columnField (name: FieldName, field: ResolvedColumnField) =
+        { Name = string name
+          Type = fieldTypeString field.FieldType
+          Default = field.DefaultValue |> Option.map (fun v -> v.ToOzmaQLString())
+          IsNullable = field.IsNullable
+          IsImmutable = field.IsImmutable
+          InheritedFrom = field.InheritedFrom |> Option.map entityRefString }
+
+    let computedField (name: FieldName, field: ResolvedComputedField) =
+        { Name = string name
+          Expression = field.Expression.ToOzmaQLString()
+          IsVirtual = Option.isSome field.Virtual
+          IsMaterialized = field.IsMaterialized
+          InheritedFrom = field.InheritedFrom |> Option.map entityRefString }
+
+    let referenceTarget (field: ResolvedColumnField) =
+        match field.FieldType with
+        | FTScalar(SFTReference(target, _))
+        | FTArray(SFTReference(target, _)) -> Some(entityRefString target)
+        | _ -> None
+
+    { Name = string ref.Name
+      Parent = entity.Parent |> Option.map entityRefString
+      Children = entity.Children |> Map.keys |> Seq.map entityRefString |> sortedNames
+      MainField = string entity.MainField
+      ColumnFields = entity.ColumnFields |> Map.toSeq |> Seq.map columnField |> Seq.toArray
+      ComputedFields =
+        entity.ComputedFields
+        |> Map.toSeq
+        |> Seq.mapMaybe (fun (name, field) -> Result.getOption field |> Option.map (fun f -> computedField (name, f)))
+        |> Seq.toArray
+      CheckConstraints =
+        entity.CheckConstraints
+        |> Map.toSeq
+        |> Seq.map (fun (name, c) ->
+            { Name = string name
+              Expression = c.Expression.ToOzmaQLString() })
+        |> Seq.toArray
+      UniqueConstraints =
+        entity.UniqueConstraints
+        |> Map.toSeq
+        |> Seq.map (fun (name, c) ->
+            { Name = string name
+              Columns = c.Columns |> Array.map string })
+        |> Seq.toArray
+      Indexes =
+        entity.Indexes
+        |> Map.toSeq
+        |> Seq.map (fun (name, i) ->
+            { Name = string name
+              Expressions = i.Expressions |> Array.map (fun e -> e.ToOzmaQLString())
+              IsUnique = i.IsUnique })
+        |> Seq.toArray
+      References =
+        entity.ColumnFields
+        |> Map.toSeq
+        |> Seq.mapMaybe (fun (name, field) ->
+            referenceTarget field
+            |> Option.map (fun target -> { Field = string name; Target = target }))
+        |> Seq.toArray }
+
 type IntrospectionAPI(api: IOzmaDBAPI) =
     let rctx = api.Request
     let ctx = rctx.Context
@@ -121,5 +205,31 @@ type IntrospectionAPI(api: IOzmaDBAPI) =
             | :? UserException as e -> return failedResult (errorItem VEKCompile e)
         }
 
+    member this.GetSchemas() : Task<SchemaSummary[]> =
+        task {
+            return
+                ctx.Layout.Schemas
+                |> Map.toSeq
+                |> Seq.map (fun (schemaName, schema) ->
+                    { Schema = string schemaName
+                      Entities =
+                        schema.Entities
+                        |> Map.toSeq
+                        |> Seq.map (fun (name, entity) ->
+                            { Name = string name
+                              Parent = entity.Parent |> Option.map entityRefString
+                              IsAbstract = entity.IsAbstract
+                              IsFrozen = entity.IsFrozen })
+                        |> Seq.sortBy (fun e -> e.Name)
+                        |> Seq.toArray })
+                |> Seq.sortBy (fun s -> s.Schema)
+                |> Seq.toArray
+        }
+
+    member this.GetEntity(ref: ResolvedEntityRef) : Task<EntityDetails option> =
+        task { return ctx.Layout.FindEntity ref |> Option.map (entityDetails ref) }
+
     interface IIntrospectionAPI with
         member this.ValidateQuery req = this.ValidateQuery req
+        member this.GetSchemas() = this.GetSchemas()
+        member this.GetEntity ref = this.GetEntity ref

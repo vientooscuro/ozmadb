@@ -1038,8 +1038,63 @@ type ValidateResult =
       [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
       Sql: string option }
 
+type SchemaEntitySummary =
+    { Name: string
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      Parent: string option
+      IsAbstract: bool
+      IsFrozen: bool }
+
+type SchemaSummary =
+    { Schema: string
+      Entities: SchemaEntitySummary[] }
+
+type EntityColumnField =
+    { Name: string
+      Type: string
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      Default: string option
+      IsNullable: bool
+      IsImmutable: bool
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      InheritedFrom: string option }
+
+type EntityComputedField =
+    { Name: string
+      Expression: string
+      IsVirtual: bool
+      IsMaterialized: bool
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      InheritedFrom: string option }
+
+type EntityCheckConstraint = { Name: string; Expression: string }
+
+type EntityUniqueConstraint = { Name: string; Columns: string[] }
+
+type EntityIndex =
+    { Name: string
+      Expressions: string[]
+      IsUnique: bool }
+
+type EntityReference = { Field: string; Target: string }
+
+type EntityDetails =
+    { Name: string
+      [<JsonProperty(NullValueHandling = NullValueHandling.Include)>]
+      Parent: string option
+      Children: string[]
+      MainField: string
+      ColumnFields: EntityColumnField[]
+      ComputedFields: EntityComputedField[]
+      CheckConstraints: EntityCheckConstraint[]
+      UniqueConstraints: EntityUniqueConstraint[]
+      Indexes: EntityIndex[]
+      References: EntityReference[] }
+
 type IIntrospectionAPI =
     abstract member ValidateQuery: ValidateQueryRequest -> Task<ValidateResult>
+    abstract member GetSchemas: unit -> Task<SchemaSummary[]>
+    abstract member GetEntity: ResolvedEntityRef -> Task<EntityDetails option>
 
 type IOzmaDBAPI =
     abstract member Request: IRequestContext
