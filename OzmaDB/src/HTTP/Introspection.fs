@@ -1,6 +1,7 @@
 module OzmaDB.HTTP.Introspection
 
 open System
+open System.Numerics
 open System.Runtime.Serialization
 open System.Text
 open System.Threading.Tasks
@@ -9,6 +10,7 @@ open Microsoft.AspNetCore.Http
 open Giraffe.EndpointRouting
 open Microsoft.Extensions.Configuration
 open Microsoft.Extensions.DependencyInjection
+open Newtonsoft.Json.Linq
 
 open OzmaDB.OzmaUtils.Serialization.Utils
 open OzmaDB.Exception
@@ -24,6 +26,8 @@ type IntrospectionErrorInfo =
     | [<CaseKey("entityNotFound")>] IEEntityNotFound of Entity: string
     | [<CaseKey("fieldNotFound")>] IEFieldNotFound of Field: string
     | [<CaseKey("fullDryRunDisabled")>] IEFullDryRunDisabled
+    | [<CaseKey("rawSqlDisabled")>] IERawSqlDisabled
+    | [<CaseKey("reportNotFound")>] IEReportNotFound of Report: string
 
     member this.LogMessage =
         match this with
@@ -31,6 +35,8 @@ type IntrospectionErrorInfo =
         | IEEntityNotFound entity -> sprintf "Entity not found: %s" entity
         | IEFieldNotFound field -> sprintf "Field not found: %s" field
         | IEFullDryRunDisabled -> "full dry-run is disabled for this instance"
+        | IERawSqlDisabled -> "raw SQL is disabled for this instance"
+        | IEReportNotFound report -> sprintf "Report not found: %s" report
 
     [<DataMember>]
     member this.Message = this.LogMessage
@@ -44,6 +50,8 @@ type IntrospectionErrorInfo =
         | IEEntityNotFound _ -> 404
         | IEFieldNotFound _ -> 404
         | IEFullDryRunDisabled -> 403
+        | IERawSqlDisabled -> 403
+        | IEReportNotFound _ -> 404
 
     static member private LookupKey = prepareLookupCaseKey<IntrospectionErrorInfo>
     member this.Error = IntrospectionErrorInfo.LookupKey this |> Option.get
@@ -80,18 +88,103 @@ type DryRunResponse =
       Ddl: string[]
       BrokenObjects: string[] }
 
+// TODO: make it private after we fix JSON serialization for the private F# types.
+[<NoEquality; NoComparison>]
+type SqlHTTPRequest =
+    { Sql: string
+      [<DataMember(EmitDefaultValue = false)>]
+      Params: JToken[] option
+      [<DataMember(EmitDefaultValue = false)>]
+      TimeoutMs: int option
+      [<DataMember(EmitDefaultValue = false)>]
+      MaxRows: int option }
+
 // `ozmaDB:introspection` configuration section.
 type IntrospectionSettings =
     { // A full dry run holds the migration locks and locks on altered tables while it runs.
-      AllowFullDryRun: bool }
+      AllowFullDryRun: bool
+      // Read-only, but still lets root read any table and run any function the database user can.
+      AllowRawSql: bool }
 
 let readIntrospectionSettings (config: IConfiguration) : IntrospectionSettings =
     let section = config.GetSection("OzmaDB").GetSection("Introspection")
-    { AllowFullDryRun = section.GetValue("AllowFullDryRun", false) }
 
-let private capabilities =
+    { AllowFullDryRun = section.GetValue("AllowFullDryRun", false)
+      AllowRawSql = section.GetValue("AllowRawSql", false) }
+
+let private capabilities (settings: IntrospectionSettings) =
+    let sql = if settings.AllowRawSql then [| "sql" |] else [||]
+
     { Version = 1
-      Features = [| "validate"; "schema"; "dependencies"; "search"; "code_check"; "dry_run" |] }
+      Features =
+        Array.concat
+            [ [| "validate"; "schema"; "dependencies"; "search"; "code_check"; "dry_run" |]
+              sql
+              [| "pg_reports" |] ] }
+
+let private sqlParam (token: JToken) : Result<SqlParam, string> =
+    if isNull token then
+        Ok SPNull
+    else
+        match token.Type with
+        | JTokenType.Null -> Ok SPNull
+        | JTokenType.String -> Ok(SPString(token.Value<string>()))
+        | JTokenType.Boolean -> Ok(SPBool(token.Value<bool>()))
+        | JTokenType.Integer ->
+            match (token :?> JValue).Value with
+            | :? BigInteger as i when i < BigInteger(Decimal.MinValue) || i > BigInteger(Decimal.MaxValue) ->
+                Error "Numeric parameter is out of range"
+            | :? BigInteger as i -> Ok(SPDecimal(decimal i))
+            | v -> Ok(SPInt(Convert.ToInt64 v))
+        | JTokenType.Float ->
+            try
+                Ok(SPDecimal(Convert.ToDecimal((token :?> JValue).Value)))
+            with :? OverflowException ->
+                Error "Numeric parameter is out of range"
+        | _ -> Error "Parameters must be strings, numbers, booleans or nulls"
+
+let private validateSqlRequest (req: SqlHTTPRequest) : Result<SqlQueryRequest, string> =
+    let query =
+        if isNull req.Sql then
+            ""
+        else
+            let mutable length = req.Sql.Length
+
+            while length > 0
+                  && (req.Sql.[length - 1] = ';' || Char.IsWhiteSpace req.Sql.[length - 1]) do
+                length <- length - 1
+
+            req.Sql.Substring(0, length)
+
+    let timeoutMs = Option.defaultValue 5000 req.TimeoutMs
+    let maxRows = Option.defaultValue 500 req.MaxRows
+
+    let pars =
+        req.Params
+        |> Option.defaultValue [||]
+        |> Array.fold
+            (fun acc token ->
+                match acc, sqlParam token with
+                | Ok pars, Ok par -> Ok(par :: pars)
+                | (Error _ as e), _ -> e
+                | _, Error e -> Error e)
+            (Ok [])
+
+    if query = "" then
+        Error "Field sql is required and must not be empty"
+    else if timeoutMs < 1 || timeoutMs > 30000 then
+        Error "Field timeoutMs must be between 1 and 30000"
+    else if maxRows < 1 || maxRows > 5000 then
+        Error "Field maxRows must be between 1 and 5000"
+    else
+        match pars with
+        | Error e -> Error e
+        | Ok pars ->
+            Ok
+                { Sql = query
+                  Params = pars |> List.rev |> List.toArray
+                  TimeoutMs = timeoutMs
+                  MaxRows = maxRows }
 
 let private maxCodeCheckSourceSize = 1024 * 1024
 
@@ -108,7 +201,7 @@ let introspectionApi (serviceProvider: IServiceProvider) : Endpoint list =
 
     let getCapabilities =
         utils.PerformReadJob
-        <| fun api -> requireRoot api (fun () -> Task.FromResult(jobJson capabilities))
+        <| fun api -> requireRoot api (fun () -> Task.FromResult(jobJson (capabilities settings)))
 
     let validateQuery =
         safeBindJson
@@ -292,6 +385,36 @@ let introspectionApi (serviceProvider: IServiceProvider) : Endpoint list =
                                           BrokenObjects = List.toArray validation.BrokenObjects }
                             }
 
+    let runSql =
+        safeBindJson
+        <| fun (req: SqlHTTPRequest) ->
+            utils.PerformReadJob
+            <| fun api ->
+                requireRoot api
+                <| fun () ->
+                    if not settings.AllowRawSql then
+                        Task.FromResult(jobError IERawSqlDisabled)
+                    else
+                        match validateSqlRequest req with
+                        | Error e -> Task.FromResult(jobError (RIRequest e))
+                        | Ok req ->
+                            task {
+                                // Nothing is committed: the request transaction is rolled back when the job ends.
+                                let! ret = api.Introspection.RunSql req
+                                return jobJson ret
+                            }
+
+    let pgReport (name: string) : HttpHandler =
+        utils.PerformReadJob
+        <| fun api ->
+            requireRoot api
+            <| fun () ->
+                task {
+                    match! api.Introspection.PgReport name with
+                    | Some ret -> return jobJson ret
+                    | None -> return jobError (IEReportNotFound name)
+                }
+
     [ subRoute
           "/introspection"
           [ GET [ route "/capabilities" getCapabilities ]
@@ -301,4 +424,6 @@ let introspectionApi (serviceProvider: IServiceProvider) : Endpoint list =
             GET [ route "/search" search ]
             POST [ route "/funql/validate" validateQuery ]
             POST [ route "/code/check" checkCode ]
-            POST [ route "/dry_run" dryRun ] ] ]
+            POST [ route "/dry_run" dryRun ]
+            POST [ route "/sql" runSql ]
+            GET [ routef "/pg/%s" pgReport ] ] ]

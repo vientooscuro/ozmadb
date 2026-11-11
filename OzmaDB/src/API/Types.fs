@@ -1011,6 +1011,10 @@ type ValidateErrorKind =
     | [<CaseKey("migration")>] VEKMigration
     | [<CaseKey("migration_conflict")>] VEKMigrationConflict
     | [<CaseKey("lock_timeout")>] VEKLockTimeout
+    | [<CaseKey("timeout")>] VEKTimeout
+    | [<CaseKey("read_only")>] VEKReadOnly
+    | [<CaseKey("sql")>] VEKSql
+    | [<CaseKey("extension_missing")>] VEKExtensionMissing
 
 type ValidateErrorItem =
     { Message: string
@@ -1174,6 +1178,29 @@ type CodeCheckResult =
       Errors: ValidateErrorItem[]
       Warnings: string[] }
 
+type SqlParam =
+    | SPString of string
+    | SPInt of int64
+    | SPDecimal of decimal
+    | SPBool of bool
+    | SPNull
+
+type SqlQueryRequest =
+    { Sql: string
+      Params: SqlParam[]
+      TimeoutMs: int
+      MaxRows: int }
+
+type SqlColumn = { Name: string; PgType: string }
+
+[<NoEquality; NoComparison>]
+type SqlQueryResult =
+    { Ok: bool
+      Errors: ValidateErrorItem[]
+      Columns: SqlColumn[]
+      Rows: JToken[][]
+      Truncated: bool }
+
 type IIntrospectionAPI =
     abstract member ValidateQuery: ValidateQueryRequest -> Task<ValidateResult>
     abstract member GetSchemas: unit -> Task<SchemaSummary[]>
@@ -1184,6 +1211,9 @@ type IIntrospectionAPI =
 
     abstract member Search: SearchRequest -> Task<SearchResult>
     abstract member CheckCode: CodeCheckRequest -> Task<CodeCheckResult>
+    abstract member RunSql: SqlQueryRequest -> Task<SqlQueryResult>
+    // `None` for an unknown report.
+    abstract member PgReport: string -> Task<SqlQueryResult option>
 
 type IOzmaDBAPI =
     abstract member Request: IRequestContext

@@ -3,8 +3,13 @@ module OzmaDB.API.Introspection
 open System
 open System.Collections.Generic
 open System.Runtime.CompilerServices
+open System.IO
 open System.Text.RegularExpressions
 open System.Threading.Tasks
+open Newtonsoft.Json
+open Newtonsoft.Json.Linq
+open Npgsql
+open NpgsqlTypes
 
 open OzmaDB.OzmaUtils
 open OzmaDB.Exception
@@ -598,6 +603,218 @@ let private sourceMatches (regex: Regex option) (req: SearchRequest) (src: JSSou
               Column = col + 1
               Excerpt = excerpt })
 
+let private sqlWrapperPrefix = "SELECT * FROM ("
+
+let private pgReportTimeoutMs = 10000
+let private pgReportMaxRows = 5000
+
+let private tableSizesReport =
+    """SELECT n.nspname AS schema, c.relname AS "table", pg_total_relation_size(c.oid) AS total_bytes, pg_table_size(c.oid) AS table_bytes, pg_indexes_size(c.oid) AS index_bytes
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p', 'm') AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\_toast%' AND n.nspname NOT LIKE 'pg\_temp\_%'
+ORDER BY total_bytes DESC, 1, 2
+LIMIT 200"""
+
+let private locksReport =
+    """SELECT l.pid, l.locktype, l.mode, l.granted, l.relation::regclass::text AS relation, a.query, a.state, a.wait_event
+FROM pg_locks l LEFT JOIN pg_stat_activity a ON a.pid = l.pid
+WHERE l.database IS NULL OR l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
+ORDER BY l.granted, l.pid
+LIMIT 1000"""
+
+let private activityReport =
+    """SELECT pid, usename, state, query_start, wait_event_type, wait_event, left(query, 1000) AS query
+FROM pg_stat_activity
+WHERE datname = current_database()
+ORDER BY query_start NULLS LAST
+LIMIT 1000"""
+
+let private statementsReport =
+    """SELECT query, calls, total_exec_time, mean_exec_time, rows
+FROM pg_stat_statements
+WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
+ORDER BY total_exec_time DESC
+LIMIT 50"""
+
+let private indexesUnusedReport =
+    """SELECT s.schemaname AS schema, s.relname AS "table", s.indexrelname AS index, pg_relation_size(s.indexrelid) AS index_bytes
+FROM pg_stat_user_indexes s JOIN pg_index i ON i.indexrelid = s.indexrelid
+WHERE s.idx_scan = 0 AND NOT i.indisunique
+ORDER BY index_bytes DESC, 1, 2, 3
+LIMIT 200"""
+
+let private pgReports =
+    Map.ofList
+        [ ("table_sizes", tableSizesReport)
+          ("locks", locksReport)
+          ("activity", activityReport)
+          ("statements", statementsReport)
+          ("indexes_unused", indexesUnusedReport) ]
+
+let private sqlErrorKind (sqlState: string) =
+    match sqlState with
+    | "57014" -> VEKTimeout // query_canceled, raised by statement_timeout
+    | "25006" -> VEKReadOnly // read_only_sql_transaction
+    | "42601" -> VEKSyntax // syntax_error
+    | "55P03" -> VEKLockTimeout // lock_not_available
+    | _ -> VEKSql
+
+let private sqlFailure (kind: ValidateErrorKind) (message: string) (position: (int * int) option) : SqlQueryResult =
+    { Ok = false
+      Errors =
+        [| { Message = message
+             Kind = kind
+             Line = position |> Option.map fst
+             Column = position |> Option.map snd
+             Path = None } |]
+      Columns = [||]
+      Rows = [||]
+      Truncated = false }
+
+// Maps a 1-based character position in the wrapped query back to a line and column of the user query.
+let private userSqlPosition (query: string) (position: int) : (int * int) option =
+    let offset = position - sqlWrapperPrefix.Length - 1
+
+    if position <= 0 || offset < 0 || offset > query.Length then
+        None
+    else
+        let before = query.Substring(0, offset)
+        let line = before |> Seq.filter (fun c -> c = '\n') |> Seq.length
+        let column = offset - (before.LastIndexOf('\n') + 1)
+        Some(line + 1, column + 1)
+
+let private jsonNumberRegex =
+    Regex(@"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$", RegexOptions.Compiled)
+
+let private timestampTzRegex =
+    Regex(@"^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d(?:\.\d+)?)([+-]\d\d)(?::(\d\d))?$", RegexOptions.Compiled)
+
+let private timestampRegex =
+    Regex(@"^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d(?:\.\d+)?)$", RegexOptions.Compiled)
+
+let private parseJsonValue (text: string) : JToken =
+    use reader = new JsonTextReader(new StringReader(text))
+    reader.DateParseHandling <- DateParseHandling.None
+    reader.FloatParseHandling <- FloatParseHandling.Decimal
+    reader.MaxDepth <- Nullable()
+    JToken.ReadFrom reader
+
+// Values are read in PostgreSQL text format (with `DateStyle = ISO`), so every type is readable.
+let private sqlTextValue (pgType: string) (text: string) : JToken =
+    let fallback () = JValue(text) :> JToken
+
+    match pgType with
+    | "boolean" -> JValue((text = "t")) :> JToken
+    | "smallint"
+    | "integer"
+    | "bigint"
+    | "oid"
+    | "numeric"
+    | "real"
+    | "double precision" when jsonNumberRegex.IsMatch text -> JRaw(text) :> JToken
+    | "json"
+    | "jsonb" ->
+        try
+            parseJsonValue text
+        with :? JsonException ->
+            fallback ()
+    | "bytea" when text.StartsWith(@"\x") ->
+        JValue(Convert.ToBase64String(Convert.FromHexString(text.Substring 2))) :> JToken
+    | "timestamp with time zone" ->
+        let m = timestampTzRegex.Match text
+
+        if m.Success then
+            let minutes = if m.Groups.[4].Success then m.Groups.[4].Value else "00"
+            JValue(sprintf "%sT%s%s:%s" m.Groups.[1].Value m.Groups.[2].Value m.Groups.[3].Value minutes) :> JToken
+        else
+            fallback ()
+    | "timestamp without time zone" ->
+        let m = timestampRegex.Match text
+
+        if m.Success then
+            JValue(sprintf "%sT%s" m.Groups.[1].Value m.Groups.[2].Value) :> JToken
+        else
+            fallback ()
+    | _ -> fallback ()
+
+let private npgsqlParam (param: SqlParam) : NpgsqlParameter =
+    match param with
+    | SPString s -> NpgsqlParameter(Value = s, NpgsqlDbType = NpgsqlDbType.Text)
+    | SPInt i -> NpgsqlParameter(Value = i, NpgsqlDbType = NpgsqlDbType.Bigint)
+    | SPDecimal d -> NpgsqlParameter(Value = d, NpgsqlDbType = NpgsqlDbType.Numeric)
+    | SPBool b -> NpgsqlParameter(Value = b, NpgsqlDbType = NpgsqlDbType.Boolean)
+    | SPNull -> NpgsqlParameter(Value = DBNull.Value)
+
+// Makes the request transaction read-only. Nothing is ever committed, so all `SET LOCAL`s are discarded with it.
+let private enterReadOnly (ctx: IContext) (timeoutMs: int) : Task =
+    task {
+        let query =
+            sprintf
+                "SET TRANSACTION READ ONLY; SET LOCAL statement_timeout = '%ims'; SET LOCAL lock_timeout = '1s'; SET LOCAL DateStyle = 'ISO'; SET LOCAL bytea_output = 'hex'"
+                timeoutMs
+
+        let! _ = ctx.Transaction.Connection.Query.ExecuteNonQuery query Map.empty ctx.CancellationToken
+        ()
+    }
+
+// Must run after `enterReadOnly`. A PostgreSQL error aborts the transaction, so nothing may run after it.
+let private runWrappedQuery (ctx: IContext) (query: string) (pars: SqlParam[]) (maxRows: int) : Task<SqlQueryResult> =
+    task {
+        // At least one parameter (the limit) is always bound, so Npgsql sends the text as is in a single
+        // extended-protocol Parse message instead of splitting it on semicolons, and PostgreSQL rejects
+        // multiple statements. The newline stops a trailing line comment from swallowing the wrapper.
+        let commandText =
+            sprintf "%s%s\n) AS __q LIMIT $%i" sqlWrapperPrefix query (Array.length pars + 1)
+
+        use command = new NpgsqlCommand(commandText, ctx.Transaction.Connection.Connection)
+        command.AllResultTypesAreUnknown <- true
+
+        for par in pars do
+            ignore <| command.Parameters.Add(npgsqlParam par)
+
+        ignore
+        <| command.Parameters.Add(NpgsqlParameter(Value = int64 maxRows + 1L, NpgsqlDbType = NpgsqlDbType.Bigint))
+
+        try
+            use! reader = command.ExecuteReaderAsync(ctx.CancellationToken)
+
+            let columns =
+                Array.init reader.FieldCount (fun i ->
+                    { Name = reader.GetName i
+                      PgType = reader.GetDataTypeName i })
+
+            let rows = List<JToken[]>()
+            let mutable truncated = false
+            let mutable reading = true
+
+            while reading do
+                let! hasRow = reader.ReadAsync(ctx.CancellationToken)
+
+                if not hasRow then
+                    reading <- false
+                else if rows.Count >= maxRows then
+                    truncated <- true
+                    reading <- false
+                else
+                    let getValue i =
+                        if reader.IsDBNull i then
+                            JValue.CreateNull() :> JToken
+                        else
+                            sqlTextValue columns.[i].PgType (reader.GetString i)
+
+                    rows.Add(Array.init columns.Length getValue)
+
+            return
+                { Ok = true
+                  Errors = [||]
+                  Columns = columns
+                  Rows = rows.ToArray()
+                  Truncated = truncated }
+        with :? PostgresException as e ->
+            let message = sprintf "%s (SQLSTATE %s)" e.MessageText e.SqlState
+            return sqlFailure (sqlErrorKind e.SqlState) message (userSqlPosition query e.Position)
+    }
+
 type IntrospectionAPI(api: IOzmaDBAPI) =
     let rctx = api.Request
     let ctx = rctx.Context
@@ -799,6 +1016,49 @@ type IntrospectionAPI(api: IOzmaDBAPI) =
                       Warnings = [||] }
         }
 
+    member this.RunSql(req: SqlQueryRequest) : Task<SqlQueryResult> =
+        task {
+            do! enterReadOnly ctx req.TimeoutMs
+            return! runWrappedQuery ctx req.Sql req.Params req.MaxRows
+        }
+
+    member this.PgReport(name: string) : Task<SqlQueryResult option> =
+        task {
+            match Map.tryFind name pgReports with
+            | None -> return None
+            | Some query ->
+                do! enterReadOnly ctx pgReportTimeoutMs
+
+                let! hasExtension =
+                    task {
+                        if name <> "statements" then
+                            return true
+                        else
+                            let! ret =
+                                ctx.Transaction.Connection.Query.ExecuteValueQuery
+                                    "SELECT EXISTS (SELECT FROM pg_extension WHERE extname = 'pg_stat_statements')"
+                                    Map.empty
+                                    ctx.CancellationToken
+
+                            return
+                                match ret with
+                                | Some(_, _, OzmaDB.SQL.AST.VBool true) -> true
+                                | _ -> false
+                    }
+
+                if hasExtension then
+                    let! ret = runWrappedQuery ctx query [||] pgReportMaxRows
+                    return Some ret
+                else
+                    return
+                        Some(
+                            sqlFailure
+                                VEKExtensionMissing
+                                "Extension pg_stat_statements is not installed in this database"
+                                None
+                        )
+        }
+
     interface IIntrospectionAPI with
         member this.ValidateQuery req = this.ValidateQuery req
         member this.GetSchemas() = this.GetSchemas()
@@ -806,3 +1066,5 @@ type IntrospectionAPI(api: IOzmaDBAPI) =
         member this.GetDependencies ref field = this.GetDependencies ref field
         member this.Search req = this.Search req
         member this.CheckCode req = this.CheckCode req
+        member this.RunSql req = this.RunSql req
+        member this.PgReport name = this.PgReport name
